@@ -9,7 +9,6 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from PIL import Image, ImageTk, ImageSequence
 import minecraft_launcher_lib
-from playsound import playsound
 import psutil
 import ctypes
 import tkinter.font as tkfont
@@ -118,21 +117,6 @@ current_bg=None
 bg_index=0
 if os.path.exists(FONT_PATH):
     ctypes.windll.gdi32.AddFontResourceExW(FONT_PATH, 0x10, 0)
-# -------------------------
-# SOM
-# -------------------------
-
-def click():
-    threading.Thread(target=lambda: playsound("music/click.mp3"),daemon=True).start()
-
-def tocar_musica():
-
-    def loop():
-        while True:
-            playsound("music/menu.mp3")
-            time.sleep(2)
-
-    threading.Thread(target=loop,daemon=True).start()
 
 # -------------------------
 # FECHAR JAVA
