@@ -1,4 +1,1 @@
-{
-  "version": "1.0",
-  "launcher": "https://raw.githubusercontent.com/SEUUSER/pikaverso/main/launcher.dat"
-}
+1.0
