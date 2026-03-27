@@ -1,2 +1,2 @@
 VERSION = "1.0"
-print("Hello World")
+print("Bye World")
