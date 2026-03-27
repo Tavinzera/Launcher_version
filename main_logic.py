@@ -11,7 +11,7 @@ def main():
     # Create a label with text
     label = tk.Label(
         window,
-        text="bye World",
+        text="Hello World",
         font=("Arial", 48, "bold"),
         bg="#87CEEB",
         fg="white"
