@@ -1,53 +1,101 @@
 import os
-import re
 import sys
-import subprocess
 import requests
+import customtkinter as ctk
+import json
+import threading
+import time
+import importlib.util
 
-URL_VERSAO_GITHUB = "https://raw.githubusercontent.com/Tavinzera/Launcher_version/refs/heads/main/launcher_version.txt"
-URL_LOGICA_GITHUB = "https://raw.githubusercontent.com/Tavinzera/Launcher_version/refs/heads/main/main_logic.py"
-ARQUIVO_LOCAL = "main_logic.py"
+# --- CONFIGURAÇÕES ---
+URL_CONFIG_JSON = "https://github.com/Tavinzera/Launcher_version/raw/refs/heads/main/config.json"
+FILE_PYC = "main_logic.pyc"
 
-def obter_versao_do_arquivo_local():
-    if not os.path.exists(ARQUIVO_LOCAL):
-        return "0.0.0"
-    
-    try:
-        with open(ARQUIVO_LOCAL, "r", encoding="utf-8") as f:
-            conteudo = f.read()
-            # Procura por algo como VERSION = "1.2.3" ou VERSION = '1.2.3'
-            match = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', conteudo)
-            if match:
-                return match.group(1)
-    except Exception:
-        pass
-    return "0.0.0"
+class AtomicLauncher(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Atomic")
+        self.geometry("400x180")
+        self.configure(fg_color="#000000")
+        self.resizable(False, False)
 
-def verificar_e_atualizar():
-    versao_local = obter_versao_do_arquivo_local()
-    print(f"Versão local detectada: {versao_local}")
+        self.lbl_title = ctk.CTkLabel(self, text="ATOMIC", font=("Segoe UI", 24, "bold"), text_color="#FFFFFF")
+        self.lbl_title.pack(pady=(30, 5))
 
-    try:
-        # Pegamos a versão do servidor (que ainda é um arquivo .txt pequeno para economizar internet)
-        res = requests.get(URL_VERSAO_GITHUB, timeout=5)
-        versao_remota = res.text.strip()
+        self.lbl_status = ctk.CTkLabel(self, text="Sincronizando...", font=("Segoe UI", 11), text_color="#888888")
+        self.lbl_status.pack()
 
-        if versao_remota != versao_local:
-            print(f"Atualizando para a versão {versao_remota}...")
-            res_codigo = requests.get(URL_LOGICA_GITHUB)
-            with open(ARQUIVO_LOCAL, "w", encoding="utf-8") as f:
-                f.write(res_codigo.text)
-            print("Atualizado com sucesso!")
-        else:
-            print("Você já está na última versão.")
+        self.progress = ctk.CTkProgressBar(self, width=300, height=4, fg_color="#1a1a1a", progress_color="#3b82f6")
+        self.progress.set(0)
+        self.progress.pack(pady=20)
+
+        threading.Thread(target=self.update_sequence, daemon=True).start()
+
+    def get_version_from_pyc(self):
+        """Carrega o .pyc temporariamente para ler a variável VERSION"""
+        if not os.path.exists(FILE_PYC):
+            return "0.0.0"
+        try:
+            spec = importlib.util.spec_from_file_location("temp_mod", FILE_PYC)
+            temp_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(temp_mod)
+            return getattr(temp_mod, "VERSION", "0.0.0")
+        except:
+            return "0.0.0"
+
+    def update_sequence(self):
+        try:
+            self.lbl_status.configure(text="Checando versão da DLL...")
+            v_local = self.get_version_from_pyc()
             
-    except Exception as e:
-        print(f"Erro na conexão: {e}")
+            # Busca JSON do Servidor
+            response = requests.get(URL_CONFIG_JSON, timeout=10)
+            config = response.json()
+            v_remota = config['version']
+            url_main = config['main_url']
 
-def rodar():
-    if os.path.exists(ARQUIVO_LOCAL):
-        subprocess.run([sys.executable, ARQUIVO_LOCAL])
+            if v_remota != v_local:
+                self.lbl_status.configure(text=f"Atualizando DLL: {v_local} -> {v_remota}")
+                self.progress.set(0.5)
+                
+                r_file = requests.get(url_main)
+                with open(FILE_PYC, "wb") as f:
+                    f.write(r_file.content)
+                
+                self.lbl_status.configure(text="DLL Sincronizada!")
+            else:
+                self.lbl_status.configure(text="DLL em dia.")
+            
+            self.progress.set(1.0)
+            time.sleep(1)
+            self.boot_pyc()
+
+        except Exception as e:
+            print(f"Erro: {e}")
+            self.lbl_status.configure(text="Erro de conexão. Tentando abrir...")
+            time.sleep(2)
+            self.boot_pyc()
+
+    def boot_pyc(self):
+        if not os.path.exists(FILE_PYC):
+            self.lbl_status.configure(text="Erro: DLL inexistente.")
+            return
+
+        try:
+            # Carregamento final
+            spec = importlib.util.spec_from_file_location("main_logic", FILE_PYC)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            
+            self.withdraw()
+            if hasattr(module, 'start_app'):
+                module.start_app() # O seu main_logic precisa ter essa função
+            self.destroy()
+            sys.exit()
+        except Exception as e:
+            print(f"Falha no boot: {e}")
+            self.destroy()
 
 if __name__ == "__main__":
-    verificar_e_atualizar()
-    rodar()
+    app = AtomicLauncher()
+    app.mainloop()
