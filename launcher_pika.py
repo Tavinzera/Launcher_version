@@ -1,3 +1,4 @@
+
 import os
 import json
 import uuid
@@ -14,6 +15,7 @@ import sys
 # -------------------------
 # PATHS
 # -------------------------
+VERSION = "1.0"
 APPDATA = os.getenv("APPDATA")
 GAME_DIR = os.path.join(APPDATA, "AtomicLauncher")
 CONFIG_DIR = os.path.join(GAME_DIR, "config")
@@ -254,13 +256,11 @@ def configurar_janela_barra_tarefas():
         WS_EX_APPWINDOW = 0x00040000
         WS_EX_TOOLWINDOW = 0x00000080
 
+        root.update_idletasks()
         hwnd = root.winfo_id()
         style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         style = (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-
-        root.withdraw()
-        root.after(80, root.deiconify)
     except Exception:
         pass
 
@@ -421,23 +421,20 @@ def fechar_launcher():
 
 root.protocol("WM_DELETE_WINDOW", fechar_launcher)
 configurar_janela_barra_tarefas()
+root.update_idletasks()
+root.deiconify()
+root.lift()
+try:
+    root.focus_force()
+except Exception:
+    pass
 
 
 def animacao_abrir_launcher():
     try:
-        root.attributes("-alpha", 0.0)
+        root.attributes("-alpha", 1.0)
     except Exception:
-        return
-
-    def passo(valor=0.0):
-        try:
-            root.attributes("-alpha", valor)
-        except Exception:
-            return
-        if valor < 1.0:
-            root.after(18, lambda: passo(min(1.0, valor + 0.08)))
-
-    passo(0.0)
+        pass
 
 
 # -------------------------
@@ -540,26 +537,9 @@ def animar_fade_in_inicial():
     global bg_fade_job
 
     _cancelar_animacao_background()
-
-    if bg_current_image is None:
-        renderizar_background()
-        return
-
-    destino = bg_current_image.copy()
-    preto = Image.new("RGBA", destino.size, (0, 0, 0, 255))
-    total_passos = 18
-
-    def passo(i=0):
-        global bg_fade_job
-        frame = Image.blend(preto, destino, i / total_passos)
-        _aplicar_background_image(frame)
-        if i < total_passos:
-            bg_fade_job = root.after(28, lambda: passo(i + 1))
-        else:
-            bg_fade_job = None
-            agendar_proxima_troca_background()
-
-    passo(0)
+    bg_fade_job = None
+    renderizar_background()
+    agendar_proxima_troca_background()
 
 
 def trocar_background_com_fade():
@@ -1023,7 +1003,37 @@ def abrir_config():
 # LOGIN
 # -------------------------
 def login_google():
-    return
+    try:
+        candidatos = [
+            os.path.join(os.path.dirname(__file__), "login_google.py"),
+            os.path.join(os.path.dirname(__file__), "google_login.py"),
+            os.path.join(os.path.dirname(__file__), "main_logic.py"),
+        ]
+
+        caminho_script = None
+        for candidato in candidatos:
+            if os.path.exists(candidato):
+                caminho_script = candidato
+                break
+
+        if caminho_script is None:
+            raise FileNotFoundError(
+                "Nenhum script de login foi encontrado. Crie um arquivo login_google.py na mesma pasta do launcher."
+            )
+
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        subprocess.Popen(
+            [sys.executable, caminho_script],
+            cwd=os.path.dirname(caminho_script),
+            creationflags=creationflags
+        )
+
+        fechar_launcher()
+    except Exception as e:
+        messagebox.showerror("Erro", f"Erro ao abrir login: {e}")
 
 
 def login_offline():
@@ -1057,7 +1067,7 @@ def tela_inicio():
     canvas.configure(bg=BG)
 
     renderizar_background()
-    root.after(10, animar_fade_in_inicial)
+    animar_fade_in_inicial()
 
     # faixas
     canvas.create_rectangle(0, TOPBAR_HEIGHT + SHADOW_HEIGHT, 80, 540, fill=SIDEBAR, outline="")
