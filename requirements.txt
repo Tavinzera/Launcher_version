@@ -1,5 +1,5 @@
 flask
 gunicorn
 firebase-admin
+google-auth
 requests
-bcrypt
