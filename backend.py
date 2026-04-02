@@ -10,29 +10,37 @@ from google.auth.transport import requests as google_requests
 app = Flask(__name__)
 
 # =========================
-# ENVIRONMENT
+# SECRETS VIA ENV
 # =========================
-FIREBASE_JSON = os.getenv("firebase", "").strip()
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_CLIENT_SECRET = os.getenv("client_secret", "").strip()
-GOOGLE_PROJECT_ID = os.getenv("firebase", "").strip()
+# FIREBASE_SECRET -> conteúdo completo do firebase_service_account.json
+# GOOGLE_OAUTH_JSON -> conteúdo completo do credentials.json
+FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
+GOOGLE_OAUTH_JSON = os.getenv("GOOGLE_OAUTH_JSON", "").strip()
 
-if not FIREBASE_JSON:
-    raise RuntimeError("FIREBASE_JSON não configurado no ambiente")
+if not FIREBASE_SECRET:
+    raise RuntimeError("FIREBASE_SECRET não configurado no ambiente")
+
+if not GOOGLE_OAUTH_JSON:
+    raise RuntimeError("GOOGLE_OAUTH_JSON não configurado no ambiente")
+
+try:
+    firebase_dict = json.loads(FIREBASE_SECRET)
+except Exception as e:
+    raise RuntimeError(f"FIREBASE_SECRET inválido: {e}")
+
+try:
+    oauth_dict = json.loads(GOOGLE_OAUTH_JSON)
+except Exception as e:
+    raise RuntimeError(f"GOOGLE_OAUTH_JSON inválido: {e}")
+
+installed = oauth_dict.get("installed", {})
+GOOGLE_CLIENT_ID = str(installed.get("client_id", "")).strip()
 
 if not GOOGLE_CLIENT_ID:
-    raise RuntimeError("GOOGLE_CLIENT_ID não configurado no ambiente")
-
-if not GOOGLE_CLIENT_SECRET:
-    raise RuntimeError("GOOGLE_CLIENT_SECRET não configurado no ambiente")
-
-if not GOOGLE_PROJECT_ID:
-    raise RuntimeError("GOOGLE_PROJECT_ID não configurado no ambiente")
-
-cred_dict = json.loads(FIREBASE_JSON)
+    raise RuntimeError("client_id não encontrado dentro de GOOGLE_OAUTH_JSON")
 
 if not firebase_admin._apps:
-    cred = credentials.Certificate(cred_dict)
+    cred = credentials.Certificate(firebase_dict)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
@@ -40,16 +48,20 @@ db = firestore.client()
 # =========================
 # HELPERS
 # =========================
-def google_oauth_config():
+def get_google_oauth_public_config():
+    installed_cfg = oauth_dict.get("installed", {})
     return {
         "installed": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "project_id": GOOGLE_PROJECT_ID,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uris": ["http://localhost"]
+            "client_id": installed_cfg.get("client_id", ""),
+            "project_id": installed_cfg.get("project_id", ""),
+            "auth_uri": installed_cfg.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+            "token_uri": installed_cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
+            "auth_provider_x509_cert_url": installed_cfg.get(
+                "auth_provider_x509_cert_url",
+                "https://www.googleapis.com/oauth2/v1/certs"
+            ),
+            "client_secret": installed_cfg.get("client_secret", ""),
+            "redirect_uris": installed_cfg.get("redirect_uris", ["http://localhost"])
         }
     }
 
@@ -65,14 +77,14 @@ def health():
 def auth_google_config():
     return jsonify({
         "ok": True,
-        "oauth": google_oauth_config()
+        "oauth": get_google_oauth_public_config()
     })
 
 
 @app.post("/auth/google")
 def auth_google():
     try:
-        token = (request.json or {}).get("id_token", "").strip()
+        token = str((request.json or {}).get("id_token", "")).strip()
         if not token:
             return jsonify({"ok": False, "error": "id_token ausente"}), 400
 
