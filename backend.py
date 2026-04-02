@@ -9,14 +9,25 @@ from google.auth.transport import requests as google_requests
 
 app = Flask(__name__)
 
+# =========================
+# ENVIRONMENT
+# =========================
 FIREBASE_JSON = os.getenv("firebase", "").strip()
-GOOGLE_CLIENT_ID = os.getenv("credentials", "").strip()
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.getenv("client_secret", "").strip()
+GOOGLE_PROJECT_ID = os.getenv("firebase", "").strip()
 
 if not FIREBASE_JSON:
     raise RuntimeError("FIREBASE_JSON não configurado no ambiente")
 
 if not GOOGLE_CLIENT_ID:
     raise RuntimeError("GOOGLE_CLIENT_ID não configurado no ambiente")
+
+if not GOOGLE_CLIENT_SECRET:
+    raise RuntimeError("GOOGLE_CLIENT_SECRET não configurado no ambiente")
+
+if not GOOGLE_PROJECT_ID:
+    raise RuntimeError("GOOGLE_PROJECT_ID não configurado no ambiente")
 
 cred_dict = json.loads(FIREBASE_JSON)
 
@@ -26,10 +37,36 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
+# =========================
+# HELPERS
+# =========================
+def google_oauth_config():
+    return {
+        "installed": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "project_id": GOOGLE_PROJECT_ID,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uris": ["http://localhost"]
+        }
+    }
 
+# =========================
+# ROUTES
+# =========================
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
+
+
+@app.get("/auth/google/config")
+def auth_google_config():
+    return jsonify({
+        "ok": True,
+        "oauth": google_oauth_config()
+    })
 
 
 @app.post("/auth/google")
