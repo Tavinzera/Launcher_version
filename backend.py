@@ -9,28 +9,19 @@ from google.auth.transport import requests as google_requests
 
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APPDATA = os.getenv("APPDATA", "")
-ATOMIC_DIR = os.path.join(APPDATA, "AtomicLauncher") if APPDATA else BASE_DIR
+FIREBASE_JSON = os.getenv("firebase", "").strip()
+GOOGLE_CLIENT_ID = os.getenv("credentials", "").strip()
 
-CREDENTIALS_JSON = os.path.join(ATOMIC_DIR, "credentials")
-SERVICE_ACCOUNT_JSON = os.path.join(ATOMIC_DIR, "firebase")
+if not FIREBASE_JSON:
+    raise RuntimeError("FIREBASE_JSON não configurado no ambiente")
 
+if not GOOGLE_CLIENT_ID:
+    raise RuntimeError("GOOGLE_CLIENT_ID não configurado no ambiente")
 
-def carregar_client_id():
-    with open(CREDENTIALS_JSON, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    installed = data.get("installed", {})
-    client_id = installed.get("client_id", "").strip()
-    if not client_id:
-        raise RuntimeError("client_id não encontrado no credentials.json")
-    return client_id
+cred_dict = json.loads(FIREBASE_JSON)
 
-
-GOOGLE_CLIENT_ID = carregar_client_id()
-
-cred = credentials.Certificate(SERVICE_ACCOUNT_JSON)
 if not firebase_admin._apps:
+    cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
@@ -136,4 +127,5 @@ def set_username():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8080, debug=False, use_reloader=False)
+    port = int(os.getenv("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
