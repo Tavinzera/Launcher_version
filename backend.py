@@ -13,8 +13,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APPDATA = os.getenv("APPDATA", "")
 ATOMIC_DIR = os.path.join(APPDATA, "AtomicLauncher") if APPDATA else BASE_DIR
 
-CREDENTIALS_JSON = os.path.join(ATOMIC_DIR, "credentials.json")
-SERVICE_ACCOUNT_JSON = os.path.join(ATOMIC_DIR, "firebase_service_account.json")
+CREDENTIALS_JSON = os.path.join(ATOMIC_DIR, "credentials")
+SERVICE_ACCOUNT_JSON = os.path.join(ATOMIC_DIR, "firebase")
 
 
 def carregar_client_id():
