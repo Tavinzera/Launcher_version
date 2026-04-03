@@ -6,9 +6,9 @@ import time
 import uuid
 from email.mime.text import MIMEText
 
-from flask import Flask, jsonify, request
 import firebase_admin
 from firebase_admin import credentials, firestore
+from flask import Flask, jsonify, request
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -71,10 +71,10 @@ def get_google_oauth_public_config():
             "token_uri": installed_cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
             "auth_provider_x509_cert_url": installed_cfg.get(
                 "auth_provider_x509_cert_url",
-                "https://www.googleapis.com/oauth2/v1/certs"
+                "https://www.googleapis.com/oauth2/v1/certs",
             ),
             "client_secret": installed_cfg.get("client_secret", ""),
-            "redirect_uris": installed_cfg.get("redirect_uris", ["http://localhost"])
+            "redirect_uris": installed_cfg.get("redirect_uris", ["http://localhost"]),
         }
     }
 
@@ -147,13 +147,15 @@ def validate_password(password: str) -> str | None:
 
 
 def save_pending_code(email: str, code_type: str, payload: dict) -> None:
-    db.collection("codes").document(f"{code_type}:{email}").set({
-        "email": email,
-        "type": code_type,
-        "code": payload["code"],
-        "expires_at": now_ts() + CODE_EXPIRES_SECONDS,
-        **{k: v for k, v in payload.items() if k != "code"}
-    })
+    db.collection("codes").document(f"{code_type}:{email}").set(
+        {
+            "email": email,
+            "type": code_type,
+            "code": payload["code"],
+            "expires_at": now_ts() + CODE_EXPIRES_SECONDS,
+            **{k: v for k, v in payload.items() if k != "code"},
+        }
+    )
 
 
 def read_pending_code(email: str, code_type: str):
@@ -174,10 +176,7 @@ def health():
 
 @app.get("/auth/google/config")
 def auth_google_config():
-    return jsonify({
-        "ok": True,
-        "oauth": get_google_oauth_public_config()
-    })
+    return jsonify({"ok": True, "oauth": get_google_oauth_public_config()})
 
 
 @app.post("/auth/google")
@@ -191,7 +190,7 @@ def auth_google():
             token,
             google_requests.Request(),
             GOOGLE_CLIENT_ID,
-            clock_skew_in_seconds=300
+            clock_skew_in_seconds=300,
         )
 
         google_id = str(idinfo["sub"])
@@ -210,26 +209,31 @@ def auth_google():
             current_username = old.get("username", "") or ""
             current_uuid = old.get("uuid", "") or ""
 
-        doc_ref.set({
-            "google_id": google_id,
-            "email": email,
-            "name": name,
-            "picture": picture,
-            "provider": "google",
-        }, merge=True)
-
-        return jsonify({
-            "ok": True,
-            "user": {
+        doc_ref.set(
+            {
                 "google_id": google_id,
                 "email": email,
                 "name": name,
                 "picture": picture,
-                "username": current_username,
-                "uuid": current_uuid,
+                "provider": "google",
             },
-            "needs_username": not bool(current_username)
-        })
+            merge=True,
+        )
+
+        return jsonify(
+            {
+                "ok": True,
+                "user": {
+                    "google_id": google_id,
+                    "email": email,
+                    "name": name,
+                    "picture": picture,
+                    "username": current_username,
+                    "uuid": current_uuid,
+                },
+                "needs_username": not bool(current_username),
+            }
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -259,17 +263,16 @@ def set_username():
         existing = snap.to_dict() or {}
         novo_uuid = existing.get("uuid") or str(uuid.uuid4())
 
-        user_ref.set({
-            "username": username,
-            "uuid": novo_uuid
-        }, merge=True)
+        user_ref.set({"username": username, "uuid": novo_uuid}, merge=True)
 
-        return jsonify({
-            "ok": True,
-            "google_id": google_id,
-            "username": username,
-            "uuid": novo_uuid
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "google_id": google_id,
+                "username": username,
+                "uuid": novo_uuid,
+            }
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -293,24 +296,31 @@ def register_start():
         if not email or "@" not in email:
             return jsonify({"ok": False, "error": "gmail inválido"}), 400
 
-        if find_user_by_email(email):
+        existing_user = find_user_by_email(email)
+        if existing_user:
             return jsonify({"ok": False, "error": "gmail já cadastrado"}), 409
 
         if username_exists(username):
             return jsonify({"ok": False, "error": "nickname já está em uso"}), 409
 
         code = generate_code()
-        save_pending_code(email, "register", {
-            "code": code,
-            "username": username,
-            "password_hash": generate_password_hash(password),
-        })
+        password_hash = generate_password_hash(password)
+
+        save_pending_code(
+            email,
+            "register",
+            {
+                "code": code,
+                "username": username,
+                "password_hash": password_hash,
+            },
+        )
 
         send_code_email(
             email=email,
             code=code,
             subject="PikaVerse - Confirmar cadastro",
-            body_prefix="Use este código para confirmar o seu cadastro no PikaVerse."
+            body_prefix="Use este código para confirmar a criação da sua conta no PikaVerse.",
         )
 
         return jsonify({"ok": True, "message": "Código enviado para o Gmail"})
@@ -332,6 +342,7 @@ def register_confirm():
         pending = snap.to_dict() or {}
         if pending.get("code") != code:
             return jsonify({"ok": False, "error": "código inválido"}), 400
+
         if now_ts() > int(pending.get("expires_at", 0)):
             delete_pending_code(email, "register")
             return jsonify({"ok": False, "error": "código expirado"}), 400
@@ -342,31 +353,36 @@ def register_confirm():
 
         username = pending.get("username", "")
         if username_exists(username):
+            delete_pending_code(email, "register")
             return jsonify({"ok": False, "error": "nickname já está em uso"}), 409
 
         user_doc_id = str(uuid.uuid4())
         player_uuid = str(uuid.uuid4())
 
-        db.collection("users").document(user_doc_id).set({
-            "provider": "email",
-            "email": email,
-            "username": username,
-            "password_hash": pending.get("password_hash", ""),
-            "uuid": player_uuid,
-            "created_at": now_ts(),
-        })
+        db.collection("users").document(user_doc_id).set(
+            {
+                "provider": "email",
+                "email": email,
+                "username": username,
+                "password_hash": pending.get("password_hash", ""),
+                "uuid": player_uuid,
+                "created_at": now_ts(),
+            }
+        )
 
         delete_pending_code(email, "register")
 
-        return jsonify({
-            "ok": True,
-            "user": {
-                "username": username,
-                "uuid": player_uuid,
-                "email": email,
-                "provider": "email",
+        return jsonify(
+            {
+                "ok": True,
+                "user": {
+                    "username": username,
+                    "uuid": player_uuid,
+                    "email": email,
+                    "provider": "email",
+                }
             }
-        })
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -396,7 +412,7 @@ def login_start():
             email=email,
             code=code,
             subject="PikaVerse - Confirmar login",
-            body_prefix="Use este código para confirmar o login no PikaVerse."
+            body_prefix="Use este código para confirmar o login no PikaVerse.",
         )
 
         return jsonify({"ok": True, "message": "Código enviado para o Gmail"})
@@ -418,6 +434,7 @@ def login_confirm():
         pending = snap.to_dict() or {}
         if pending.get("code") != code:
             return jsonify({"ok": False, "error": "código inválido"}), 400
+
         if now_ts() > int(pending.get("expires_at", 0)):
             delete_pending_code(email, "login")
             return jsonify({"ok": False, "error": "código expirado"}), 400
@@ -430,15 +447,17 @@ def login_confirm():
         user = user_doc.to_dict() or {}
         delete_pending_code(email, "login")
 
-        return jsonify({
-            "ok": True,
-            "user": {
-                "username": user.get("username", ""),
-                "uuid": user.get("uuid", ""),
-                "email": user.get("email", ""),
-                "provider": user.get("provider", "email"),
+        return jsonify(
+            {
+                "ok": True,
+                "user": {
+                    "username": user.get("username", ""),
+                    "uuid": user.get("uuid", ""),
+                    "email": user.get("email", ""),
+                    "provider": user.get("provider", "email"),
+                }
             }
-        })
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
