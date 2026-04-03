@@ -15,6 +15,47 @@ import ctypes
 import sys
 import requests
 
+APP_ID = os.getenv("PIKAVERSE_APP_ID", "AtomicLauncher.App")
+
+
+def aplicar_app_id_windows():
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        pass
+
+
+def forcar_icone_barra(window, icon_path):
+    if os.name != "nt" or not icon_path or not os.path.exists(icon_path):
+        return
+    try:
+        window.update_idletasks()
+        hwnd = window.winfo_id()
+        WM_SETICON = 0x0080
+        ICON_SMALL = 0
+        ICON_BIG = 1
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x00000010
+        LR_DEFAULTSIZE = 0x00000040
+
+        hicon_big = ctypes.windll.user32.LoadImageW(
+            0, icon_path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE | LR_DEFAULTSIZE
+        )
+        hicon_small = ctypes.windll.user32.LoadImageW(
+            0, icon_path, IMAGE_ICON, 16, 16, LR_LOADFROMFILE | LR_DEFAULTSIZE
+        )
+        if hicon_big:
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
+            window._hicon_big = hicon_big
+        if hicon_small:
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
+            window._hicon_small = hicon_small
+    except Exception:
+        pass
+
+
 # -------------------------
 # PATHS
 # -------------------------
@@ -243,8 +284,8 @@ def sair_da_conta():
 # -------------------------
 # ROOT
 # -------------------------
-root = tk.Tk()
-root.title("PikaVerse Launcher")
+taskbar_root = tk.Tk()
+taskbar_root.title("PikaVerse Launcher")
 
 ICON_PATH = None
 for _icon_candidate in [
@@ -257,14 +298,32 @@ for _icon_candidate in [
 
 try:
     if ICON_PATH:
-        root.iconbitmap(ICON_PATH)
+        taskbar_root.iconbitmap(ICON_PATH)
 except Exception:
     pass
 
+taskbar_root.geometry("1x1+-32000+-32000")
+taskbar_root.resizable(False, False)
+taskbar_root.configure(bg=BG)
+try:
+    taskbar_root.attributes("-alpha", 0.0)
+except Exception:
+    pass
+
+root = tk.Toplevel(taskbar_root)
+root.title("PikaVerse Launcher")
+root.transient(taskbar_root)
 root.geometry("900x540")
 root.resizable(False, False)
 root.configure(bg=BG)
 root.overrideredirect(True)
+root.withdraw()
+
+try:
+    root.attributes("-topmost", True)
+    root.after(200, lambda: root.attributes("-topmost", False))
+except Exception:
+    pass
 
 root_container = tk.Frame(root, bg=BG, highlightthickness=0, bd=0)
 root_container.pack(fill="both", expand=True)
@@ -278,7 +337,11 @@ def aplicar_icone_janela():
             img = Image.open(ICON_PATH)
             icon = ImageTk.PhotoImage(img)
             root.iconphoto(True, icon)
+            taskbar_root.iconphoto(True, icon)
             root._icon_ref = icon
+            taskbar_root._icon_ref = icon
+            forcar_icone_barra(root, ICON_PATH)
+            forcar_icone_barra(taskbar_root, ICON_PATH)
     except Exception:
         pass
 
@@ -288,8 +351,7 @@ def configurar_janela_barra_tarefas():
         return
 
     try:
-        app_id = "AtomicLauncher.App"
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     except Exception:
         pass
 
@@ -297,16 +359,28 @@ def configurar_janela_barra_tarefas():
         GWL_EXSTYLE = -20
         WS_EX_APPWINDOW = 0x00040000
         WS_EX_TOOLWINDOW = 0x00000080
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+        SWP_NOZORDER = 0x0004
+        SWP_NOACTIVATE = 0x0010
+        SWP_FRAMECHANGED = 0x0020
 
-        root.update_idletasks()
-        hwnd = root.winfo_id()
+        taskbar_root.update_idletasks()
+        hwnd = taskbar_root.winfo_id()
         style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         style = (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+        ctypes.windll.user32.SetWindowPos(
+            hwnd,
+            0,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+        )
     except Exception:
         pass
 
 
+aplicar_app_id_windows()
 aplicar_icone_janela()
 
 # -------------------------
@@ -357,8 +431,12 @@ def minimizar_janela():
     def concluir_minimizacao():
         global is_minimized, is_minimizing
         try:
-            hwnd = root.winfo_id()
-            ctypes.windll.user32.ShowWindow(hwnd, 6)
+            root.withdraw()
+        except Exception:
+            pass
+
+        try:
+            taskbar_root.iconify()
             is_minimized = True
         except Exception:
             try:
@@ -382,7 +460,7 @@ def restaurar_override(_event=None):
     def restaurar():
         global is_minimized, is_minimizing
         try:
-            estado = root.state()
+            estado = taskbar_root.state()
         except Exception:
             estado = "normal"
 
@@ -399,6 +477,18 @@ def restaurar_override(_event=None):
                 root.attributes("-alpha", 0.0)
             except Exception:
                 pass
+            try:
+                try:
+                    root.transient(taskbar_root)
+                except Exception:
+                    pass
+                root.deiconify()
+                forcar_icone_barra(taskbar_root, ICON_PATH)
+                forcar_icone_barra(root, ICON_PATH)
+                root.lift()
+                root.focus_force()
+            except Exception:
+                pass
             _animar_alpha(0.0, 1.0, passos=10, delay=18)
             is_minimized = False
             is_minimizing = False
@@ -413,14 +503,14 @@ def restaurar_override(_event=None):
 
 def ao_desminimizar(_event=None):
     try:
-        if root.state() == "normal":
+        if taskbar_root.state() == "normal":
             restaurar_override()
     except Exception:
         pass
 
 
-root.bind("<Map>", restaurar_override)
-root.bind("<Unmap>", lambda _event=None: None)
+taskbar_root.bind("<Map>", restaurar_override)
+taskbar_root.bind("<Unmap>", lambda _event=None: None)
 
 def cancelar_operacoes():
     global minecraft_process, closing_launcher
@@ -452,13 +542,26 @@ def fechar_launcher():
         root.destroy()
     except Exception:
         pass
+    try:
+        taskbar_root.destroy()
+    except Exception:
+        pass
     os._exit(0)
 
 
 root.protocol("WM_DELETE_WINDOW", fechar_launcher)
+taskbar_root.protocol("WM_DELETE_WINDOW", fechar_launcher)
+taskbar_root.update_idletasks()
+taskbar_root.deiconify()
+configurar_janela_barra_tarefas()
+try:
+    root.transient(taskbar_root)
+except Exception:
+    pass
 root.update_idletasks()
 root.deiconify()
-configurar_janela_barra_tarefas()
+forcar_icone_barra(taskbar_root, ICON_PATH)
+forcar_icone_barra(root, ICON_PATH)
 try:
     root.lift()
     root.focus_force()
@@ -1679,10 +1782,8 @@ animar_particulas()
 animar_icone_topo()
 animacao_abrir_launcher()
 try:
-    root.after(250, configurar_janela_barra_tarefas)
-    root.after(900, configurar_janela_barra_tarefas)
-    root.after(1800, configurar_janela_barra_tarefas)
+    taskbar_root.after(250, configurar_janela_barra_tarefas)
     root.after(500, iniciar_backend)
 except Exception:
     pass
-root.mainloop()
+taskbar_root.mainloop()
