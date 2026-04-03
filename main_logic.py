@@ -244,7 +244,7 @@ def sair_da_conta():
 # ROOT
 # -------------------------
 root = tk.Tk()
-root.title("Atomic Launcher")
+root.title("PikaVerse Launcher")
 
 ICON_PATH = None
 for _icon_candidate in [
@@ -931,7 +931,7 @@ def desenhar_topo():
     header_icon_label.bind("<ButtonPress-1>", iniciar_arraste)
     header_icon_label.bind("<B1-Motion>", arrastar_janela)
 
-    titulo = tk.Label(topo, text="Atomic Launcher", bg=TOPBAR, fg=TOPBAR_TEXT, font=("Arial", 12, "bold"))
+    titulo = tk.Label(topo, text="PikaVerse Launcher", bg=TOPBAR, fg=TOPBAR_TEXT, font=("Arial", 12, "bold"))
     titulo.place(relx=0.5, rely=0.5, anchor="center")
     titulo.bind("<ButtonPress-1>", iniciar_arraste)
     titulo.bind("<B1-Motion>", arrastar_janela)
@@ -1051,7 +1051,7 @@ def render_conteudo_config(tipo):
     elif tipo == "Sobre":
         bloco = tk.Frame(content_frame, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
         bloco.pack(fill="x", pady=6)
-        tk.Label(bloco, text="Atomic Launcher", bg=CARD, fg=ACCENT, font=("Arial", 14, "bold")).pack(anchor="w", padx=14, pady=(12, 4))
+        tk.Label(bloco, text="PikaVerse Launcher", bg=CARD, fg=ACCENT, font=("Arial", 14, "bold")).pack(anchor="w", padx=14, pady=(12, 4))
         tk.Label(
             bloco,
             text="Tema Umbreon\nBarra superior amarela\nFundo animado\nSem atualização automática do Fabric",
@@ -1458,6 +1458,29 @@ def desenhar_icone_google(parent):
     )
     return btn
 
+def criar_botao_login(parent, texto, comando, icone=""):
+    label = f"{icone}  {texto}" if icone else texto
+    btn = tk.Button(
+        parent,
+        text=label,
+        command=comando,
+        bg=ACCENT,
+        fg="black",
+        activebackground=ACCENT_2,
+        activeforeground="black",
+        relief="flat",
+        bd=0,
+        font=("Arial", 10, "bold"),
+        cursor="hand2",
+        padx=14,
+        pady=8,
+        highlightthickness=0,
+        compound="left",
+    )
+    return btn
+
+def desenhar_icone_google(parent):
+    return criar_botao_login(parent, "Google", login_google, "G")
 
 def tela_login():
     global login_email_entry, login_password_entry
@@ -1467,7 +1490,6 @@ def tela_login():
     canvas.configure(bg=BG)
     canvas.create_rectangle(0, 0, 900, 540, fill="#000000", outline="")
     desenhar_topo()
-    canvas.create_text(450, 110, text="Atomic", fill=ACCENT, font=("Arial", 30, "bold"))
 
     card = tk.Frame(root, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
     canvas.create_window(450, 275, window=card, width=390, height=305)
@@ -1493,28 +1515,34 @@ def tela_login():
         show="*",
     )
     login_password_entry.pack(fill="x", padx=30, ipady=5, pady=(4, 12))
-
     make_button(card, "Entrar", iniciar_login_email, bg=ACCENT, fg="black").pack(pady=(0, 10), ipadx=18)
 
-    google_wrap = tk.Frame(card, bg=CARD)
-    google_wrap.pack(pady=(0, 10))
-    desenhar_icone_google(google_wrap).pack()
+    botoes_frame = tk.Frame(card, bg=CARD)
+    botoes_frame.pack(pady=(10, 10))
 
-    tk.Button(
+    btn_offline = criar_botao_login(botoes_frame, "Offline", login_offline, "◉")
+    btn_google = criar_botao_login(botoes_frame, "Google", login_google, "G")
+    btn_criar = criar_botao_login(botoes_frame, "Criar conta", criar_conta, "+")
+
+    btn_offline.grid(row=0, column=0, padx=4)
+    btn_google.grid(row=0, column=1, padx=4)
+    btn_criar.grid(row=0, column=2, padx=4)
+
+    info = tk.Label(
         card,
-        text="Criar conta",
-        command=criar_conta,
+        text="Entre com Gmail e senha, use Google ou jogue offline.",
         bg=CARD,
-        fg=ACCENT,
-        relief="flat",
-        bd=0,
-        font=("Arial", 10, "bold"),
-        cursor="hand2"
-    ).pack()
+        fg=TEXT_DIM,
+        font=("Arial", 9),
+        justify="center"
+    )
+    info.pack(pady=(4, 10))
 
-    offline_label = tk.Label(root, text="offline", bg=BG, fg=TEXT_DIM, font=("Arial", 10, "bold"), cursor="hand2")
-    offline_label.bind("<Button-1>", lambda _event: login_offline())
-    canvas.create_window(860, 510, window=offline_label, anchor="se")
+    try:
+        login_email_entry.focus_set()
+    except Exception:
+        pass
+
 # -------------------------
 # HOME
 # -------------------------
@@ -1618,7 +1646,7 @@ def iniciar_arquivo_log():
     try:
         with open(LAUNCHER_LOG_FILE, "w", encoding="utf-8") as f:
             f.write("=" * 80 + "\n")
-            f.write("Atomic Launcher - Log completo\n")
+            f.write("PikaVerse Launcher - Log completo\n")
             f.write(f"Data: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"GAME_DIR: {GAME_DIR}\n")
             f.write(f"VERSION_ID: {VERSION_ID}\n")
