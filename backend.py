@@ -274,56 +274,46 @@ def set_username():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.post("/auth/register/confirm")
-def register_confirm():
+@app.post("/auth/register/start")
+def register_start():
     try:
         data = request.json or {}
+        username = str(data.get("username", "")).strip()
         email = normalize_email(data.get("email", ""))
-        code = str(data.get("code", "")).strip()
+        password = str(data.get("password", "")).strip()
 
-        snap = read_pending_code(email, "register")
-        if not snap.exists:
-            return jsonify({"ok": False, "error": "código inválido"}), 400
+        username_error = validate_username(username)
+        if username_error:
+            return jsonify({"ok": False, "error": username_error}), 400
 
-        pending = snap.to_dict() or {}
-        if pending.get("code") != code:
-            return jsonify({"ok": False, "error": "código inválido"}), 400
-        if now_ts() > int(pending.get("expires_at", 0)):
-            delete_pending_code(email, "register")
-            return jsonify({"ok": False, "error": "código expirado"}), 400
+        password_error = validate_password(password)
+        if password_error:
+            return jsonify({"ok": False, "error": password_error}), 400
+
+        if not email or "@" not in email:
+            return jsonify({"ok": False, "error": "gmail inválido"}), 400
 
         if find_user_by_email(email):
-            delete_pending_code(email, "register")
             return jsonify({"ok": False, "error": "gmail já cadastrado"}), 409
 
-        username = pending.get("username", "")
         if username_exists(username):
-            delete_pending_code(email, "register")
             return jsonify({"ok": False, "error": "nickname já está em uso"}), 409
 
-        user_doc_id = str(uuid.uuid4())
-        player_uuid = str(uuid.uuid4())
-
-        db.collection("users").document(user_doc_id).set({
-            "provider": "email",
-            "email": email,
+        code = generate_code()
+        save_pending_code(email, "register", {
+            "code": code,
             "username": username,
-            "password_hash": pending.get("password_hash", ""),
-            "uuid": player_uuid,
-            "created_at": now_ts(),
+            "password_hash": generate_password_hash(password),
         })
 
-        delete_pending_code(email, "register")
+        send_code_email(
+            email=email,
+            code=code,
+            subject="PikaVerse - Confirmar cadastro",
+            body_prefix="Use este código para confirmar o seu cadastro no PikaVerse."
+        )
 
-        return jsonify({
-            "ok": True,
-            "user": {
-                "username": username,
-                "uuid": player_uuid,
-                "email": email,
-                "provider": "email",
-            }
-        })
+        return jsonify({"ok": True, "message": "Código enviado para o Gmail"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
