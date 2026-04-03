@@ -430,7 +430,7 @@ def login_start():
 
         user_doc = find_user_by_email_doc(email)
         if not user_doc:
-            return jsonify({"ok": False, "error": "gmail ou senha incorretos"}), 401
+            return jsonify({"ok": False, "error": "gmail, senha incorretos ou conta inexistente"}), 401
 
         user = user_doc.to_dict() or {}
         if user.get("provider") == "google" and not user.get("password_hash"):
