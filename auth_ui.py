@@ -2,10 +2,9 @@ import os
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 import json
-import subprocess
-import sys
 import tkinter as tk
 from tkinter import messagebox
+
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
 
@@ -36,20 +35,27 @@ SCOPES = [
 _root = tk.Tk()
 _root.withdraw()
 
+
 def erro(msg: str):
     messagebox.showerror("Erro", msg, parent=_root)
 
-def salvar_conta_local(username: str, uuidv: str, email: str = "", name: str = "", picture: str = ""):
+
+def info(msg: str):
+    messagebox.showinfo("Google", msg, parent=_root)
+
+
+def salvar_conta_local(username: str, uuidv: str, email: str = "", name: str = "", picture: str = "", provider: str = "google"):
     data = {
         "username": username,
         "uuid": uuidv,
         "email": email,
         "name": name,
         "picture": picture,
-        "provider": "google"
+        "provider": provider
     }
     with open(ACCOUNT_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
+
 
 def salvar_login_type_google():
     data = {
@@ -73,44 +79,24 @@ def salvar_login_type_google():
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-def abrir_launcher():
-    base_dir = os.path.dirname(__file__)
-    candidatos = [
-        os.path.join(base_dir, "main_logic.py"),
-        os.path.join(base_dir, "launcher_ready.py"),
-        os.path.join(base_dir, "launcher.py"),
-    ]
-
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-
-    for caminho in candidatos:
-        if os.path.exists(caminho):
-            subprocess.Popen(
-                [sys.executable, caminho],
-                cwd=base_dir,
-                creationflags=creationflags,
-                close_fds=(os.name != "nt")
-            )
-            return True
-    return False
 
 def backend_online() -> bool:
     try:
-        r = requests.get(f"{BACKEND_URL}/health", timeout=25)
+        r = requests.get(f"{BACKEND_URL}/health", timeout=60)
         return bool(r.ok)
     except Exception:
         return False
 
+
 def acordar_backend():
     try:
-        requests.get(f"{BACKEND_URL}/health", timeout=25)
+        requests.get(f"{BACKEND_URL}/health", timeout=60)
     except Exception:
         pass
 
+
 def obter_oauth_config():
-    r = requests.get(f"{BACKEND_URL}/auth/google/config", timeout=25)
+    r = requests.get(f"{BACKEND_URL}/auth/google/config", timeout=60)
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(data.get("error", "Falha ao obter configuração OAuth"))
@@ -119,45 +105,23 @@ def obter_oauth_config():
         raise RuntimeError("Configuração OAuth inválida recebida do backend")
     return oauth
 
-def abrir_launcher_e_fechar():
-    abriu = abrir_launcher()
-    if not abriu:
-        erro("Login concluído, mas não encontrei o launcher para abrir.")
-        os._exit(1)
 
-    # dá tempo para o processo do launcher aparecer e assumir a barra de tarefas
-    _root.after(1200, lambda: os._exit(0))
+def finalizar():
+    try:
+        _root.destroy()
+    except Exception:
+        pass
 
-def tela_abrindo_launcher(username: str):
-    win = tk.Toplevel(_root)
-    win.title("PikaVerse Auth")
-    win.geometry("420x170")
-    win.configure(bg=BG)
-    win.resizable(False, False)
-
-    frame = tk.Frame(win, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
-    frame.place(relx=0.5, rely=0.5, anchor="center", width=340, height=110)
-
-    tk.Label(frame, text="Logado", bg=CARD, fg=ACCENT, font=("Arial", 18, "bold")).pack(pady=(16, 8))
-    tk.Label(frame, text=f"Bem-vindo, {username}", bg=CARD, fg=TEXT, font=("Arial", 11)).pack()
-    tk.Label(frame, text="Abrindo launcher...", bg=CARD, fg=TEXT, font=("Arial", 10)).pack(pady=(12, 0))
-
-    win.protocol("WM_DELETE_WINDOW", lambda: None)
-    win.deiconify()
-    win.lift()
-    win.focus_force()
-    _root.after(300, abrir_launcher_e_fechar)
-    _root.mainloop()
 
 def tela_nickname(user_data: dict):
     win = tk.Toplevel(_root)
-    win.title("Escolher Nickname")
-    win.geometry("430x220")
+    win.title("Escolher nickname")
+    win.geometry("430x230")
     win.configure(bg=BG)
     win.resizable(False, False)
 
     frame = tk.Frame(win, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
-    frame.place(relx=0.5, rely=0.5, anchor="center", width=360, height=160)
+    frame.place(relx=0.5, rely=0.5, anchor="center", width=360, height=170)
 
     tk.Label(frame, text="Escolha seu nickname", bg=CARD, fg=ACCENT, font=("Arial", 16, "bold")).pack(pady=(18, 6))
     tk.Label(frame, text=user_data.get("email", ""), bg=CARD, fg=TEXT, font=("Arial", 10)).pack(pady=(0, 10))
@@ -177,25 +141,28 @@ def tela_nickname(user_data: dict):
     entry.pack(fill="x", padx=30, ipady=5)
     entry.focus_set()
 
+    status = tk.Label(frame, text="", bg=CARD, fg="#FF6B6B", font=("Arial", 9, "bold"))
+    status.pack(pady=(10, 0))
+
     def confirmar():
         username = entry.get().strip()
         if not username:
-            messagebox.showerror("Erro", "Digite um nickname", parent=win)
+            status.config(text="Digite um nickname.")
             return
 
         try:
             r = requests.post(
                 f"{BACKEND_URL}/auth/set-username",
                 json={"google_id": user_data["google_id"], "username": username},
-                timeout=25
+                timeout=60
             )
             data = r.json()
         except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao salvar nickname: {e}", parent=win)
+            status.config(text=f"Falha ao salvar nickname: {e}")
             return
 
         if not data.get("ok"):
-            messagebox.showerror("Erro", data.get("error", "Erro ao salvar nickname"), parent=win)
+            status.config(text=data.get("error", "Erro ao salvar nickname"))
             return
 
         salvar_conta_local(
@@ -203,16 +170,13 @@ def tela_nickname(user_data: dict):
             uuidv=data["uuid"],
             email=user_data.get("email", ""),
             name=user_data.get("name", ""),
-            picture=user_data.get("picture", "")
+            picture=user_data.get("picture", ""),
+            provider="google"
         )
         salvar_login_type_google()
-
-        try:
-            win.destroy()
-        except Exception:
-            pass
-
-        tela_abrindo_launcher(data["username"])
+        info("Login Google concluído.")
+        win.destroy()
+        finalizar()
 
     tk.Button(
         frame,
@@ -227,15 +191,16 @@ def tela_nickname(user_data: dict):
     ).pack(pady=(14, 0), ipadx=16, ipady=4)
 
     win.bind("<Return>", lambda e: confirmar())
-    win.protocol("WM_DELETE_WINDOW", lambda: os._exit(0))
+    win.protocol("WM_DELETE_WINDOW", finalizar)
     win.deiconify()
     win.lift()
     win.focus_force()
-    _root.mainloop()
+
 
 def login():
     if "SEU-BACKEND.onrender.com" in BACKEND_URL:
         erro("Defina a URL real do backend em PIKAVERSE_BACKEND_URL ou no código.")
+        finalizar()
         return
 
     try:
@@ -243,6 +208,7 @@ def login():
 
         if not backend_online():
             erro(f"O backend não está online em {BACKEND_URL}")
+            finalizar()
             return
 
         oauth_config = obter_oauth_config()
@@ -261,18 +227,20 @@ def login():
         token_value = getattr(creds, "id_token", None)
         if not token_value:
             erro("O Google não retornou id_token.")
+            finalizar()
             return
 
         r = requests.post(
             f"{BACKEND_URL}/auth/google",
             json={"id_token": token_value},
-            timeout=25
+            timeout=60
         )
 
         data = r.json()
 
         if not data.get("ok"):
             erro(data.get("error", "Falha no backend"))
+            finalizar()
             return
 
         user = data["user"]
@@ -285,13 +253,18 @@ def login():
                 uuidv=user.get("uuid", ""),
                 email=user.get("email", ""),
                 name=user.get("name", ""),
-                picture=user.get("picture", "")
+                picture=user.get("picture", ""),
+                provider="google"
             )
             salvar_login_type_google()
-            tela_abrindo_launcher(user.get("username", "Jogador"))
+            info("Login Google concluído.")
+            finalizar()
 
     except Exception as e:
         erro(f"Erro ao abrir login Google:\n{e}")
+        finalizar()
+
 
 if __name__ == "__main__":
-    login()
+    _root.after(0, login)
+    _root.mainloop()
