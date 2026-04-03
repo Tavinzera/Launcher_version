@@ -8,6 +8,65 @@ from tkinter import messagebox
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
 
+import ctypes
+
+APP_ID = os.getenv("PIKAVERSE_APP_ID", "AtomicLauncher.App")
+ICON_PATH = None
+for _icon_candidate in [
+    os.path.join(os.path.dirname(__file__), "icon.ico"),
+    os.path.join(os.path.dirname(__file__), "assets", "icon.ico"),
+]:
+    if os.path.exists(_icon_candidate):
+        ICON_PATH = _icon_candidate
+        break
+
+
+def aplicar_app_id_windows():
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        pass
+
+
+def aplicar_icone_janela(window):
+    try:
+        if ICON_PATH and os.path.exists(ICON_PATH):
+            try:
+                window.iconbitmap(ICON_PATH)
+            except Exception:
+                pass
+
+            hwnd = None
+            try:
+                window.update_idletasks()
+                hwnd = window.winfo_id()
+            except Exception:
+                pass
+
+            if hwnd and os.name == "nt":
+                try:
+                    WM_SETICON = 0x0080
+                    ICON_SMALL = 0
+                    ICON_BIG = 1
+                    IMAGE_ICON = 1
+                    LR_LOADFROMFILE = 0x00000010
+                    LR_DEFAULTSIZE = 0x00000040
+                    hicon_big = ctypes.windll.user32.LoadImageW(0, ICON_PATH, IMAGE_ICON, 32, 32, LR_LOADFROMFILE | LR_DEFAULTSIZE)
+                    hicon_small = ctypes.windll.user32.LoadImageW(0, ICON_PATH, IMAGE_ICON, 16, 16, LR_LOADFROMFILE | LR_DEFAULTSIZE)
+                    if hicon_big:
+                        ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
+                        window._hicon_big = hicon_big
+                    if hicon_small:
+                        ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
+                        window._hicon_small = hicon_small
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 APPDATA = os.getenv("APPDATA") or ""
 ATOMIC_DIR = os.path.join(APPDATA, "AtomicLauncher")
 CONFIG_DIR = os.path.join(ATOMIC_DIR, "config")
@@ -33,6 +92,8 @@ SCOPES = [
 ]
 
 _root = tk.Tk()
+aplicar_app_id_windows()
+aplicar_icone_janela(_root)
 _root.withdraw()
 
 
@@ -115,6 +176,7 @@ def finalizar():
 
 def tela_nickname(user_data: dict):
     win = tk.Toplevel(_root)
+    aplicar_icone_janela(win)
     win.title("Escolher nickname")
     win.geometry("430x230")
     win.configure(bg=BG)
