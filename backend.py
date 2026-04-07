@@ -1,14 +1,12 @@
 import json
 import os
 import random
-import smtplib
-import socket
-import ssl
 import time
 import uuid
-from email.mime.text import MIMEText
+from typing import Optional
 
 import firebase_admin
+import requests
 from firebase_admin import credentials, firestore
 from flask import Flask, jsonify, request
 from google.auth.transport import requests as google_requests
@@ -22,20 +20,26 @@ app = Flask(__name__)
 # =========================
 FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
 GOOGLE_OAUTH_JSON = os.getenv("GOOGLE_OAUTH_JSON", "").strip()
-EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
-EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
 CODE_EXPIRES_SECONDS = int(os.getenv("CODE_EXPIRES_SECONDS", "300"))
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com").strip() or "smtp.gmail.com"
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "true").strip().lower() in {"1", "true", "yes", "on"}
-SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "15"))
+# Resend
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "").strip()
+RESEND_FROM_NAME = os.getenv("RESEND_FROM_NAME", "PikaVerse").strip() or "PikaVerse"
+RESEND_REPLY_TO = os.getenv("RESEND_REPLY_TO", RESEND_FROM_EMAIL).strip()
+RESEND_TIMEOUT = int(os.getenv("RESEND_TIMEOUT", "15"))
 
 if not FIREBASE_SECRET:
     raise RuntimeError("FIREBASE_SECRET não configurado no ambiente")
 
 if not GOOGLE_OAUTH_JSON:
     raise RuntimeError("GOOGLE_OAUTH_JSON não configurado no ambiente")
+
+if not RESEND_API_KEY:
+    raise RuntimeError("RESEND_API_KEY não configurado no ambiente")
+
+if not RESEND_FROM_EMAIL:
+    raise RuntimeError("RESEND_FROM_EMAIL não configurado no ambiente")
 
 try:
     firebase_dict = json.loads(FIREBASE_SECRET)
@@ -62,10 +66,6 @@ db = firestore.client()
 # =========================
 # HELPERS
 # =========================
-class MailSendError(RuntimeError):
-    pass
-
-
 def now_ts() -> int:
     return int(time.time())
 
@@ -96,45 +96,61 @@ def generate_code() -> str:
     return f"{random.randint(0, 999999):06d}"
 
 
-def send_code_email(email: str, code: str, subject: str, body_prefix: str) -> None:
-    if not EMAIL_USER or not EMAIL_PASS:
-        raise MailSendError("EMAIL_USER ou EMAIL_PASS não configurados")
+def resend_from_header() -> str:
+    return f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>"
 
-    body = (
+
+def send_code_email(email: str, code: str, subject: str, body_prefix: str) -> None:
+    html = f"""
+    <div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#111\">
+      <h2 style=\"margin-bottom:12px\">{subject}</h2>
+      <p>{body_prefix}</p>
+      <p style=\"font-size:18px\"><strong>Código: {code}</strong></p>
+      <p>Esse código expira em {CODE_EXPIRES_SECONDS // 60} minutos.</p>
+      <p>Se você não solicitou isso, ignore este email.</p>
+    </div>
+    """.strip()
+
+    text = (
         f"{body_prefix}\n\n"
         f"Código: {code}\n\n"
         f"Esse código expira em {CODE_EXPIRES_SECONDS // 60} minutos.\n"
         "Se você não solicitou isso, ignore este email."
     )
 
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
-    msg["To"] = email
+    payload = {
+        "from": resend_from_header(),
+        "to": [email],
+        "subject": subject,
+        "html": html,
+        "text": text,
+    }
+    if RESEND_REPLY_TO:
+        payload["reply_to"] = RESEND_REPLY_TO
 
     try:
-        if SMTP_USE_SSL:
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT, context=context) as server:
-                server.login(EMAIL_USER, EMAIL_PASS)
-                server.sendmail(EMAIL_USER, [email], msg.as_string())
-        else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as server:
-                server.ehlo()
-                server.starttls(context=ssl.create_default_context())
-                server.ehlo()
-                server.login(EMAIL_USER, EMAIL_PASS)
-                server.sendmail(EMAIL_USER, [email], msg.as_string())
-    except smtplib.SMTPAuthenticationError:
-        raise MailSendError("falha de autenticação no email; verifique EMAIL_USER/EMAIL_PASS ou senha de app")
-    except smtplib.SMTPConnectError as e:
-        raise MailSendError(f"falha ao conectar no servidor SMTP: {e}")
-    except (socket.timeout, TimeoutError):
-        raise MailSendError("timeout ao conectar no servidor de email")
-    except OSError as e:
-        raise MailSendError(f"erro de rede ao enviar email: {e}")
-    except smtplib.SMTPException as e:
-        raise MailSendError(f"erro SMTP ao enviar email: {e}")
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=RESEND_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"erro de rede ao enviar email via Resend: {e}") from e
+
+    text_body = (response.text or "").strip()
+    try:
+        data = response.json() if text_body else {}
+    except Exception:
+        data = {"raw": text_body[:500]}
+
+    if response.status_code >= 400:
+        message = data.get("message") or data.get("error") or text_body[:500] or f"HTTP {response.status_code}"
+        raise RuntimeError(f"Resend retornou erro {response.status_code}: {message}")
+
 
 
 def find_user_by_email_doc(email: str):
@@ -145,7 +161,7 @@ def find_user_by_email_doc(email: str):
     return None
 
 
-def username_exists(username: str, exclude_doc_id: str | None = None) -> bool:
+def username_exists(username: str, exclude_doc_id: Optional[str] = None) -> bool:
     docs = db.collection("users").where("username", "==", username).limit(5).stream()
     for doc in docs:
         if exclude_doc_id is None or doc.id != exclude_doc_id:
@@ -153,7 +169,7 @@ def username_exists(username: str, exclude_doc_id: str | None = None) -> bool:
     return False
 
 
-def validate_username(username: str) -> str | None:
+def validate_username(username: str) -> Optional[str]:
     if not username:
         return "nickname vazio"
     if len(username) < 3:
@@ -166,7 +182,7 @@ def validate_username(username: str) -> str | None:
     return None
 
 
-def validate_password(password: str) -> str | None:
+def validate_password(password: str) -> Optional[str]:
     if not password:
         return "senha vazia"
     if len(password) < 6:
@@ -201,12 +217,8 @@ def delete_pending_code(email: str, code_type: str) -> None:
 def health():
     return jsonify({
         "ok": True,
-        "smtp": {
-            "host": SMTP_HOST,
-            "port": SMTP_PORT,
-            "ssl": SMTP_USE_SSL,
-            "configured": bool(EMAIL_USER and EMAIL_PASS),
-        },
+        "email_provider": "resend",
+        "resend_from_email": RESEND_FROM_EMAIL,
     })
 
 
@@ -395,7 +407,7 @@ def register_start():
                 subject="PikaVerse - Confirmar cadastro",
                 body_prefix="Use este código para confirmar a criação da sua conta no PikaVerse.",
             )
-        except MailSendError as e:
+        except Exception as e:
             delete_pending_code(email, "register")
             return jsonify({"ok": False, "error": str(e)}), 502
 
@@ -488,7 +500,7 @@ def login_start():
                 subject="PikaVerse - Confirmar login",
                 body_prefix="Use este código para confirmar o login no PikaVerse.",
             )
-        except MailSendError as e:
+        except Exception as e:
             delete_pending_code(email, "login")
             return jsonify({"ok": False, "error": str(e)}), 502
 
