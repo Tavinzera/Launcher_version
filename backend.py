@@ -2,6 +2,8 @@ import json
 import os
 import random
 import smtplib
+import socket
+import ssl
 import time
 import uuid
 from email.mime.text import MIMEText
@@ -23,6 +25,11 @@ GOOGLE_OAUTH_JSON = os.getenv("GOOGLE_OAUTH_JSON", "").strip()
 EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
 EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
 CODE_EXPIRES_SECONDS = int(os.getenv("CODE_EXPIRES_SECONDS", "300"))
+
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com").strip() or "smtp.gmail.com"
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "true").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "15"))
 
 if not FIREBASE_SECRET:
     raise RuntimeError("FIREBASE_SECRET não configurado no ambiente")
@@ -55,6 +62,10 @@ db = firestore.client()
 # =========================
 # HELPERS
 # =========================
+class MailSendError(RuntimeError):
+    pass
+
+
 def now_ts() -> int:
     return int(time.time())
 
@@ -87,7 +98,7 @@ def generate_code() -> str:
 
 def send_code_email(email: str, code: str, subject: str, body_prefix: str) -> None:
     if not EMAIL_USER or not EMAIL_PASS:
-        raise RuntimeError("EMAIL_USER ou EMAIL_PASS não configurados")
+        raise MailSendError("EMAIL_USER ou EMAIL_PASS não configurados")
 
     body = (
         f"{body_prefix}\n\n"
@@ -101,9 +112,29 @@ def send_code_email(email: str, code: str, subject: str, body_prefix: str) -> No
     msg["From"] = EMAIL_USER
     msg["To"] = email
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.sendmail(EMAIL_USER, [email], msg.as_string())
+    try:
+        if SMTP_USE_SSL:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT, context=context) as server:
+                server.login(EMAIL_USER, EMAIL_PASS)
+                server.sendmail(EMAIL_USER, [email], msg.as_string())
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                server.login(EMAIL_USER, EMAIL_PASS)
+                server.sendmail(EMAIL_USER, [email], msg.as_string())
+    except smtplib.SMTPAuthenticationError:
+        raise MailSendError("falha de autenticação no email; verifique EMAIL_USER/EMAIL_PASS ou senha de app")
+    except smtplib.SMTPConnectError as e:
+        raise MailSendError(f"falha ao conectar no servidor SMTP: {e}")
+    except (socket.timeout, TimeoutError):
+        raise MailSendError("timeout ao conectar no servidor de email")
+    except OSError as e:
+        raise MailSendError(f"erro de rede ao enviar email: {e}")
+    except smtplib.SMTPException as e:
+        raise MailSendError(f"erro SMTP ao enviar email: {e}")
 
 
 def find_user_by_email_doc(email: str):
@@ -168,7 +199,15 @@ def delete_pending_code(email: str, code_type: str) -> None:
 # =========================
 @app.get("/health")
 def health():
-    return jsonify({"ok": True})
+    return jsonify({
+        "ok": True,
+        "smtp": {
+            "host": SMTP_HOST,
+            "port": SMTP_PORT,
+            "ssl": SMTP_USE_SSL,
+            "configured": bool(EMAIL_USER and EMAIL_PASS),
+        },
+    })
 
 
 @app.get("/auth/google/config")
@@ -195,7 +234,6 @@ def auth_google():
         name = idinfo.get("name", "")
         picture = idinfo.get("picture", "")
 
-        # Se já existir uma conta com esse email, reaproveita ela
         existing_email_doc = find_user_by_email_doc(email)
 
         if existing_email_doc:
@@ -226,7 +264,6 @@ def auth_google():
                 "needs_username": not bool(current_username),
             })
 
-        # Se não existir por email, tenta pelo google_id
         doc_ref = db.collection("users").document(google_id)
         snap = doc_ref.get()
 
@@ -277,7 +314,6 @@ def set_username():
         if username_error:
             return jsonify({"ok": False, "error": username_error}), 400
 
-        # Primeiro tenta encontrar a conta pelo google_id dentro do documento
         docs = db.collection("users").where("google_id", "==", google_id).limit(1).stream()
         user_doc = None
         for doc in docs:
@@ -285,7 +321,6 @@ def set_username():
             break
 
         if user_doc is None:
-            # fallback: tenta doc com id = google_id
             snap = db.collection("users").document(google_id).get()
             if snap.exists:
                 user_doc = snap
@@ -353,12 +388,16 @@ def register_start():
             },
         )
 
-        send_code_email(
-            email=email,
-            code=code,
-            subject="PikaVerse - Confirmar cadastro",
-            body_prefix="Use este código para confirmar a criação da sua conta no PikaVerse.",
-        )
+        try:
+            send_code_email(
+                email=email,
+                code=code,
+                subject="PikaVerse - Confirmar cadastro",
+                body_prefix="Use este código para confirmar a criação da sua conta no PikaVerse.",
+            )
+        except MailSendError as e:
+            delete_pending_code(email, "register")
+            return jsonify({"ok": False, "error": str(e)}), 502
 
         return jsonify({"ok": True, "message": "Código enviado para o Gmail"})
     except Exception as e:
@@ -442,12 +481,16 @@ def login_start():
         code = generate_code()
         save_pending_code(email, "login", {"code": code})
 
-        send_code_email(
-            email=email,
-            code=code,
-            subject="PikaVerse - Confirmar login",
-            body_prefix="Use este código para confirmar o login no PikaVerse.",
-        )
+        try:
+            send_code_email(
+                email=email,
+                code=code,
+                subject="PikaVerse - Confirmar login",
+                body_prefix="Use este código para confirmar o login no PikaVerse.",
+            )
+        except MailSendError as e:
+            delete_pending_code(email, "login")
+            return jsonify({"ok": False, "error": str(e)}), 502
 
         return jsonify({"ok": True, "message": "Código enviado para o Gmail"})
     except Exception as e:
