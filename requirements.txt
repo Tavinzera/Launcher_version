@@ -3,3 +3,4 @@ firebase-admin
 google-auth
 werkzeug
 requests
+gunicorn
