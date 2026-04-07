@@ -1,5 +1,6 @@
 import datetime
 import os
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 import json
 import uuid
 import random
@@ -14,6 +15,7 @@ import minecraft_launcher_lib.fabric
 import ctypes
 import sys
 import requests
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 APP_ID = os.getenv("PIKAVERSE_APP_ID", "AtomicLauncher.App")
 
@@ -60,8 +62,32 @@ def forcar_icone_barra(window, icon_path):
 # PATHS
 # -------------------------
 VERSION = "1.0"
-APPDATA = os.getenv("APPDATA")
-GAME_DIR = os.path.join(APPDATA, "AtomicLauncher")
+
+def get_appdata_dir():
+    return os.getenv("APPDATA") or os.path.expanduser(r"~\AppData\Roaming")
+
+
+def get_runtime_dir():
+    return os.path.join(get_appdata_dir(), "AtomicLauncher")
+
+
+def get_resource_path(*paths):
+    return os.path.join(get_runtime_dir(), *paths)
+
+
+def garantir_runtime_no_syspath():
+    runtime_dir = get_runtime_dir()
+    exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else ""
+    current_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+
+    for path in [runtime_dir, exe_dir, current_dir]:
+        if path and path not in sys.path:
+            sys.path.insert(0, path)
+
+
+
+APPDATA = get_appdata_dir()
+GAME_DIR = get_runtime_dir()
 CONFIG_DIR = os.path.join(GAME_DIR, "config")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 ACCOUNT_FILE = os.path.join(GAME_DIR, "account.json")
@@ -74,11 +100,12 @@ LOGS_DIR = os.path.join(GAME_DIR, "logs")
 LAUNCHER_LOG_FILE = os.path.join(LOGS_DIR, "launcher_full.log")
 
 os.makedirs(LOGS_DIR, exist_ok=True)
+garantir_runtime_no_syspath()
 
 # -------------------------
 # CONFIG GERAL
 # -------------------------
-VERSION_ID = "fabric-loader-0.18.5-1.21.1"
+VERSION_ID = "fabric-loader-0.18.4-1.21.1"
 VERSION_MC = "1.21.1"
 BACKEND_URL = os.getenv("PIKAVERSE_BACKEND_URL", "https://launcher-version.onrender.com").rstrip("/")
 
@@ -289,8 +316,8 @@ taskbar_root.title("PikaVerse Launcher")
 
 ICON_PATH = None
 for _icon_candidate in [
-    os.path.join(os.path.dirname(__file__), "icon.ico"),
-    os.path.join(os.path.dirname(__file__), "assets", "icon.ico"),
+    get_resource_path("icon.ico"),
+    get_resource_path("assets", "icon.ico"),
 ]:
     if os.path.exists(_icon_candidate):
         ICON_PATH = _icon_candidate
@@ -320,8 +347,7 @@ root.overrideredirect(True)
 root.withdraw()
 
 try:
-    root.attributes("-topmost", True)
-    root.after(200, lambda: root.attributes("-topmost", False))
+    root.attributes("-topmost", False)
 except Exception:
     pass
 
@@ -330,6 +356,18 @@ root_container.pack(fill="both", expand=True)
 
 canvas = tk.Canvas(root_container, width=900, height=540, highlightthickness=0, bg=BG)
 canvas.pack(fill="both", expand=True)
+
+def manter_launcher_na_frente(_event=None):
+    try:
+        root.deiconify()
+    except Exception:
+        pass
+
+    try:
+        root.lift()
+    except Exception:
+        pass
+
 
 def aplicar_icone_janela():
     try:
@@ -382,6 +420,13 @@ def configurar_janela_barra_tarefas():
 
 aplicar_app_id_windows()
 aplicar_icone_janela()
+
+try:
+    root.after(50, manter_launcher_na_frente)
+    root.after(400, manter_launcher_na_frente)
+    root.after(1200, manter_launcher_na_frente)
+except Exception:
+    pass
 
 # -------------------------
 # JANELA CUSTOMIZADA
@@ -603,7 +648,7 @@ def carregar_backgrounds():
     bg_current_index = 0
     bg_current_image = None
 
-    pasta = os.path.join(os.path.dirname(__file__), "backgrounds")
+    pasta = get_resource_path("backgrounds")
     os.makedirs(pasta, exist_ok=True)
 
     for f in sorted(os.listdir(pasta)):
@@ -729,10 +774,9 @@ carregar_backgrounds()
 def carregar_icone_topo():
     global icon_frames
     icon_frames = []
-    pasta = os.path.dirname(__file__)
     possiveis = [
-        os.path.join(pasta, "icon.ico"),
-        os.path.join(pasta, "assets", "icon.ico"),
+        get_resource_path("icon.ico"),
+        get_resource_path("assets", "icon.ico"),
     ]
     for caminho in possiveis:
         if os.path.exists(caminho):
@@ -1282,36 +1326,162 @@ def verificar_login_google_concluido():
     root.after(1200, verificar_login_google_concluido)
 
 
+
+
+GOOGLE_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+]
+
+
+def _parse_json_response(resp):
+    try:
+        return resp.json()
+    except Exception:
+        body = (resp.text or "").strip()
+        if resp.ok:
+            raise RuntimeError(f"Resposta inválida do servidor: {body[:300]}")
+        raise RuntimeError(f"Servidor respondeu {resp.status_code}: {body[:300]}")
+
+
+def _post_json(url, payload, timeout=60):
+    r = requests.post(url, json=payload, timeout=timeout)
+    return r, _parse_json_response(r)
+
+
+def _get_json(url, timeout=60):
+    r = requests.get(url, timeout=timeout)
+    return r, _parse_json_response(r)
+
+
+def google_auth_main(owner_window=None):
+    parent = owner_window or root
+    try:
+        try:
+            requests.get(f"{BACKEND_URL}/health", timeout=10)
+        except Exception:
+            pass
+
+        r_cfg, data_cfg = _get_json(f"{BACKEND_URL}/auth/google/config", timeout=60)
+        if not data_cfg.get("ok"):
+            raise RuntimeError(data_cfg.get("error", "Falha ao obter configuração OAuth"))
+
+        oauth = data_cfg.get("oauth")
+        if not oauth or "installed" not in oauth:
+            raise RuntimeError("Configuração OAuth inválida recebida do backend")
+
+        flow = InstalledAppFlow.from_client_config(oauth, scopes=GOOGLE_SCOPES)
+        creds = flow.run_local_server(host="127.0.0.1", port=0, open_browser=True)
+        token_value = getattr(creds, "id_token", None)
+        if not token_value:
+            raise RuntimeError("O Google não retornou id_token.")
+
+        _r_auth, data_auth = _post_json(f"{BACKEND_URL}/auth/google", {"id_token": token_value}, timeout=60)
+        if not data_auth.get("ok"):
+            raise RuntimeError(data_auth.get("error", "Falha no backend"))
+
+        user = data_auth.get("user", {}) or {}
+
+        if data_auth.get("needs_username"):
+            win = tk.Toplevel(parent)
+            win.title("Escolher nickname")
+            win.geometry("430x230")
+            win.configure(bg=BG)
+            win.resizable(False, False)
+            try:
+                win.transient(parent)
+                win.grab_set()
+            except Exception:
+                pass
+
+            frame = tk.Frame(win, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
+            frame.place(relx=0.5, rely=0.5, anchor="center", width=360, height=170)
+
+            tk.Label(frame, text="Escolha seu nickname", bg=CARD, fg=ACCENT, font=("Arial", 16, "bold")).pack(pady=(18, 6))
+            tk.Label(frame, text=user.get("email", ""), bg=CARD, fg=TEXT, font=("Arial", 10)).pack(pady=(0, 10))
+
+            entry = tk.Entry(
+                frame,
+                bg=ENTRY_BG,
+                fg=TEXT,
+                insertbackground=ACCENT,
+                relief="flat",
+                bd=1,
+                font=("Arial", 11),
+                highlightthickness=1,
+                highlightbackground=BORDER,
+                highlightcolor=ACCENT,
+            )
+            entry.pack(fill="x", padx=30, ipady=5)
+            entry.focus_set()
+
+            status = tk.Label(frame, text="", bg=CARD, fg="#FF6B6B", font=("Arial", 9, "bold"))
+            status.pack(pady=(10, 0))
+
+            def confirmar():
+                username = entry.get().strip()
+                if not username:
+                    status.config(text="Digite um nickname.")
+                    return
+                try:
+                    _r_set, data_set = _post_json(
+                        f"{BACKEND_URL}/auth/set-username",
+                        {"google_id": user.get("google_id", ""), "username": username},
+                        timeout=60,
+                    )
+                except Exception as e:
+                    status.config(text=f"Falha ao salvar nickname: {e}")
+                    return
+
+                if not data_set.get("ok"):
+                    status.config(text=data_set.get("error", "Erro ao salvar nickname"))
+                    return
+
+                salvar_conta_completa(
+                    data_set.get("username", username),
+                    data_set.get("uuid", ""),
+                    email=user.get("email", ""),
+                    provider="google",
+                    name=user.get("name", ""),
+                    picture=user.get("picture", ""),
+                )
+                salvar_config_campos(login_type="google", offline_user="")
+                try:
+                    win.destroy()
+                except Exception:
+                    pass
+                tela_inicio()
+
+            make_button(frame, "Confirmar", confirmar, bg=ACCENT, fg="black").pack(pady=(14, 0), ipadx=12)
+            win.bind("<Return>", lambda _e: confirmar())
+            return
+
+        salvar_conta_completa(
+            user.get("username", ""),
+            user.get("uuid", ""),
+            email=user.get("email", ""),
+            provider="google",
+            name=user.get("name", ""),
+            picture=user.get("picture", ""),
+        )
+        salvar_config_campos(login_type="google", offline_user="")
+        tela_inicio()
+
+    except Exception as e:
+        messagebox.showerror("Erro", f"Erro ao abrir login Google: {e}", parent=parent)
+
+
+
 def login_google():
     global google_login_polling, google_login_started_at, last_account_signature
     try:
         iniciar_backend()
-
-        base_dir = os.path.dirname(__file__)
-        caminho_script = os.path.join(base_dir, "auth_ui.py")
-
-        if not os.path.exists(caminho_script):
-            raise FileNotFoundError("auth_ui.py não encontrado na pasta do launcher.")
-
-        creationflags = 0
-        if os.name == "nt":
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-        subprocess.Popen(
-            [sys.executable, caminho_script],
-            cwd=os.path.dirname(caminho_script),
-            creationflags=creationflags
-        )
-
-        google_login_polling = True
+        garantir_runtime_no_syspath()
+        google_login_polling = False
         google_login_started_at = int(time.time()) if "time" in globals() else 0
         last_account_signature = _assinatura_conta_local()
-        messagebox.showinfo(
-            "Google",
-            "A tela de login continuará aberta. Termine o login Google no navegador e no popup que abrir."
-        )
-        root.after(1200, verificar_login_google_concluido)
-
+        google_auth_main(owner_window=root)
     except Exception as e:
         messagebox.showerror("Erro", f"Erro ao abrir login Google: {e}")
 
@@ -1383,12 +1553,11 @@ def iniciar_login_email():
         return
 
     try:
-        r = requests.post(
+        _r, data = _post_json(
             f"{BACKEND_URL}/auth/login/start",
-            json={"email": email, "password": senha},
-            timeout=60
+            {"email": email, "password": senha},
+            timeout=60,
         )
-        data = r.json()
     except Exception as e:
         messagebox.showerror("Erro", f"Falha ao conectar no servidor: {e}")
         return
@@ -1397,20 +1566,37 @@ def iniciar_login_email():
         messagebox.showerror("Erro", data.get("error", "Gmail ou senha incorretos"))
         return
 
-    abrir_janela_confirmacao(
-        "Confirmar login",
-        email,
-        "/auth/login/confirm",
-        tela_inicio
-    )
+    user = data.get("user", {}) or {}
+    username = user.get("username", "")
+    uuidv = user.get("uuid", "")
+    email_resp = user.get("email", email)
+    provider = user.get("provider", "email")
+
+    if username and uuidv:
+        salvar_conta_completa(username, uuidv, email=email_resp, provider=provider)
+        salvar_config_campos(
+            login_type=provider if provider in ("google", "email") else "email",
+            offline_user="",
+        )
+
+    messagebox.showinfo("Sucesso", data.get("message", "Login realizado com sucesso"))
+    tela_inicio()
 
 
 def criar_conta():
     win = tk.Toplevel(root)
     win.title("Criar conta")
-    win.geometry("430x420")
+    win.geometry("470x430")
     win.resizable(False, False)
     win.configure(bg=BG)
+    try:
+        win.transient(root)
+        win.grab_set()
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after(300, lambda: win.attributes("-topmost", False))
+    except Exception:
+        pass
 
     frame = tk.Frame(
         win,
@@ -1418,7 +1604,7 @@ def criar_conta():
         highlightthickness=1,
         highlightbackground=BORDER
     )
-    frame.place(relx=0.5, rely=0.5, anchor="center", width=360, height=350)
+    frame.place(relx=0.5, rely=0.5, anchor="center", width=390, height=360)
 
     tk.Label(
         frame,
@@ -1443,7 +1629,7 @@ def criar_conta():
 
     info_label = tk.Label(
         frame,
-        text="Um código será enviado para o Gmail para confirmar o cadastro.",
+        text="A conta será criada imediatamente, sem código por Gmail.",
         bg=CARD,
         fg=TEXT_DIM,
         font=("Arial", 9),
@@ -1462,87 +1648,54 @@ def criar_conta():
             return
 
         try:
-            r = requests.post(
+            _r, data = _post_json(
                 f"{BACKEND_URL}/auth/register/start",
-                json={
+                {
                     "username": username,
                     "email": email,
                     "password": senha
                 },
                 timeout=60
             )
-            data = r.json()
         except Exception as e:
             messagebox.showerror("Erro", f"Falha ao conectar: {e}", parent=win)
             return
 
         if not data.get("ok"):
-            messagebox.showerror("Erro", data.get("error", "Falha ao iniciar cadastro"), parent=win)
+            messagebox.showerror("Erro", data.get("error", "Falha ao criar cadastro"), parent=win)
             return
 
-        for widget in frame.winfo_children():
-            widget.destroy()
+        user = data.get("user", {}) or {}
+        username_ok = user.get("username", username)
+        uuidv = user.get("uuid", "")
+        email_resp = user.get("email", email)
+        provider = user.get("provider", "email")
 
-        tk.Label(
-            frame,
-            text="Confirmar cadastro",
-            bg=CARD,
-            fg=ACCENT,
-            font=("Arial", 16, "bold")
-        ).pack(pady=(18, 6))
+        if username_ok and uuidv:
+            salvar_conta_completa(username_ok, uuidv, email=email_resp, provider=provider)
+            salvar_config_campos(login_type=provider if provider in ("google", "email") else "email", offline_user="")
 
-        tk.Label(frame, text=email, bg=CARD, fg=TEXT, font=("Arial", 10)).pack(pady=(0, 10))
-        tk.Label(frame, text="Digite o código enviado no Gmail", bg=CARD, fg=TEXT_DIM, font=("Arial", 9)).pack(pady=(0, 8))
-
-        code_entry = make_entry(frame)
-        code_entry.pack(fill="x", padx=28, ipady=5)
-        code_entry.focus_set()
-
-        status_label = tk.Label(frame, text="", bg=CARD, fg="#FF6B6B", font=("Arial", 9, "bold"))
-        status_label.pack(pady=(10, 0))
-
-        def confirmar_codigo():
-            codigo = code_entry.get().strip()
-            if not codigo:
-                status_label.config(text="Digite o código para confirmar.")
-                return
-
-            try:
-                r2 = requests.post(
-                    f"{BACKEND_URL}/auth/register/confirm",
-                    json={"email": email, "code": codigo},
-                    timeout=60
-                )
-                data2 = r2.json()
-            except Exception as e:
-                status_label.config(text=f"Falha ao confirmar: {e}")
-                return
-
-            if not data2.get("ok"):
-                status_label.config(text=data2.get("error", "Código incorreto. Tente novamente."))
-                return
-
-            user = data2.get("user", {})
-            username_ok = user.get("username", "")
-            uuidv = user.get("uuid", "")
-            email_resp = user.get("email", email)
-            provider = user.get("provider", "email")
-
-            if username_ok and uuidv:
-                salvar_conta_completa(username_ok, uuidv, email=email_resp, provider=provider)
-                salvar_config_campos(login_type=provider, offline_user="")
-
-            messagebox.showinfo("Sucesso", "Conta criada com sucesso!", parent=win)
+        messagebox.showinfo("Sucesso", data.get("message", "Conta criada com sucesso!"), parent=win)
+        try:
             win.destroy()
-            tela_inicio()
+        except Exception:
+            pass
+        tela_inicio()
 
-        make_button(frame, "Confirmar código", confirmar_codigo, bg=ACCENT, fg="black").pack(pady=(14, 0), ipadx=12)
-        win.bind("<Return>", lambda _e: confirmar_codigo())
+    botoes = tk.Frame(frame, bg=CARD)
+    botoes.pack(side="bottom", pady=(6, 14), fill="x")
 
-    btn_criar = make_button(frame, "Criar conta", enviar, bg=ACCENT, fg="black")
-    btn_criar.pack(pady=(4, 0), ipadx=18)
+    btn_criar = make_button(botoes, "Criar conta", enviar, bg=ACCENT, fg="black")
+    btn_criar.pack(pady=(0, 0), ipadx=18)
 
-    username_entry.focus_set()
+    def focar_primeiro_campo():
+        try:
+            username_entry.focus_force()
+            username_entry.icursor("end")
+        except Exception:
+            pass
+
+    win.after(120, focar_primeiro_campo)
 
 
 def desenhar_icone_google(parent):
@@ -1618,6 +1771,10 @@ def tela_login():
         show="*",
     )
     login_password_entry.pack(fill="x", padx=30, ipady=5, pady=(4, 12))
+    login_email_entry.bind("<Button-1>", lambda _e: login_email_entry.focus_force())
+    login_password_entry.bind("<Button-1>", lambda _e: login_password_entry.focus_force())
+    login_email_entry.bind("<Return>", lambda _e: iniciar_login_email())
+    login_password_entry.bind("<Return>", lambda _e: iniciar_login_email())
     make_button(card, "Entrar", iniciar_login_email, bg=ACCENT, fg="black").pack(pady=(0, 10), ipadx=18)
 
     botoes_frame = tk.Frame(card, bg=CARD)
@@ -1641,10 +1798,15 @@ def tela_login():
     )
     info.pack(pady=(4, 10))
 
-    try:
-        login_email_entry.focus_set()
-    except Exception:
-        pass
+    def focar_login():
+        try:
+            root.lift()
+            login_email_entry.focus_force()
+            login_email_entry.icursor("end")
+        except Exception:
+            pass
+
+    root.after(120, focar_login)
 
 # -------------------------
 # HOME
@@ -1782,8 +1944,16 @@ animar_particulas()
 animar_icone_topo()
 animacao_abrir_launcher()
 try:
+    root.bind("<Map>", manter_launcher_na_frente)
+    root.bind("<FocusIn>", manter_launcher_na_frente)
+    taskbar_root.bind("<FocusIn>", manter_launcher_na_frente)
+except Exception:
+    pass
+
+try:
     taskbar_root.after(250, configurar_janela_barra_tarefas)
     root.after(500, iniciar_backend)
+    root.after(800, manter_launcher_na_frente)
 except Exception:
     pass
 taskbar_root.mainloop()
