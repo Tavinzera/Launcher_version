@@ -2,6 +2,7 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -9,12 +10,10 @@ from flask import Flask, jsonify, request
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-# =========================
-# ENV
-# =========================
 FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
 GOOGLE_OAUTH_JSON = os.getenv("GOOGLE_OAUTH_JSON", "").strip()
 
@@ -45,10 +44,11 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
+SKINS_DIR = Path(app.static_folder) / "skins"
+SKINS_DIR.mkdir(parents=True, exist_ok=True)
+MAX_SKIN_BYTES = 2 * 1024 * 1024
 
-# =========================
-# HELPERS
-# =========================
+
 def now_ts() -> int:
     return int(time.time())
 
@@ -140,9 +140,20 @@ def build_skin_payload(user: dict) -> dict:
     }
 
 
-# =========================
-# ROUTES
-# =========================
+def build_absolute_skin_url(filename: str) -> str:
+    return request.host_url.rstrip("/") + f"/static/skins/{filename}"
+
+
+def delete_existing_skin_files(uuidv: str) -> None:
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        p = SKINS_DIR / f"{uuidv}.{ext}"
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
@@ -223,6 +234,10 @@ def auth_google():
             "linked_google": True,
             "created_at": now_ts(),
             "updated_at": now_ts(),
+            "skin_type": "default",
+            "skin_url": "",
+            "skin_model": "classic",
+            "skin_updated_at": 0,
         }, merge=True)
 
         return jsonify({
@@ -389,7 +404,6 @@ def login_start():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-# Compatibilidade com launchers antigos
 @app.post("/auth/register/confirm")
 def register_confirm():
     return jsonify({
@@ -406,9 +420,6 @@ def login_confirm():
     }), 410
 
 
-# =========================
-# SKIN
-# =========================
 @app.get("/skin/get")
 def skin_get():
     try:
@@ -422,11 +433,7 @@ def skin_get():
             return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
 
         user = user_doc.to_dict() or {}
-
-        return jsonify({
-            "ok": True,
-            "skin": build_skin_payload(user),
-        })
+        return jsonify({"ok": True, "skin": build_skin_payload(user)})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -449,12 +456,13 @@ def skin_set():
         if not user_doc:
             return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
 
+        updated_ts = now_ts()
         db.collection("users").document(user_doc.id).set({
             "skin_type": "custom",
             "skin_url": skin_url,
             "skin_model": skin_model,
-            "skin_updated_at": now_ts(),
-            "updated_at": now_ts(),
+            "skin_updated_at": updated_ts,
+            "updated_at": updated_ts,
         }, merge=True)
 
         return jsonify({
@@ -464,7 +472,67 @@ def skin_set():
                 "skin_type": "custom",
                 "skin_url": skin_url,
                 "skin_model": skin_model,
-                "skin_updated_at": now_ts(),
+                "skin_updated_at": updated_ts,
+            }
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.post("/skin/upload")
+def skin_upload():
+    try:
+        uuidv = str(request.form.get("uuid", "")).strip()
+        skin_model = validate_skin_model(request.form.get("skin_model", "classic"))
+        skin_file = request.files.get("skin_file")
+
+        if not uuidv:
+            return jsonify({"ok": False, "error": "uuid ausente"}), 400
+
+        if skin_file is None or not getattr(skin_file, "filename", ""):
+            return jsonify({"ok": False, "error": "arquivo da skin ausente"}), 400
+
+        user_doc = find_user_by_uuid_doc(uuidv)
+        if not user_doc:
+            return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
+
+        filename = secure_filename(skin_file.filename or "skin.png")
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+        if ext not in ("png", "jpg", "jpeg", "webp"):
+            return jsonify({"ok": False, "error": "formato inválido; envie PNG, JPG, JPEG ou WEBP"}), 400
+
+        raw = skin_file.read()
+        if not raw:
+            return jsonify({"ok": False, "error": "arquivo vazio"}), 400
+        if len(raw) > MAX_SKIN_BYTES:
+            return jsonify({"ok": False, "error": "arquivo muito grande; limite de 2 MB"}), 400
+
+        delete_existing_skin_files(uuidv)
+
+        final_name = f"{uuidv}.{ext}"
+        final_path = SKINS_DIR / final_name
+        with open(final_path, "wb") as f:
+            f.write(raw)
+
+        updated_ts = now_ts()
+        skin_url = build_absolute_skin_url(final_name) + f"?v={updated_ts}"
+
+        db.collection("users").document(user_doc.id).set({
+            "skin_type": "custom",
+            "skin_url": skin_url,
+            "skin_model": skin_model,
+            "skin_updated_at": updated_ts,
+            "updated_at": updated_ts,
+        }, merge=True)
+
+        return jsonify({
+            "ok": True,
+            "message": "Skin enviada com sucesso",
+            "skin": {
+                "skin_type": "custom",
+                "skin_url": skin_url,
+                "skin_model": skin_model,
+                "skin_updated_at": updated_ts,
             }
         })
     except Exception as e:
@@ -484,12 +552,15 @@ def skin_reset():
         if not user_doc:
             return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
 
+        delete_existing_skin_files(uuidv)
+        updated_ts = now_ts()
+
         db.collection("users").document(user_doc.id).set({
             "skin_type": "default",
             "skin_url": "",
             "skin_model": "classic",
-            "skin_updated_at": now_ts(),
-            "updated_at": now_ts(),
+            "skin_updated_at": updated_ts,
+            "updated_at": updated_ts,
         }, merge=True)
 
         return jsonify({
@@ -499,7 +570,7 @@ def skin_reset():
                 "skin_type": "default",
                 "skin_url": "",
                 "skin_model": "classic",
-                "skin_updated_at": now_ts(),
+                "skin_updated_at": updated_ts,
             }
         })
     except Exception as e:
