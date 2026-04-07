@@ -83,6 +83,16 @@ def find_user_by_email_doc(email: str):
     return None
 
 
+def find_user_by_uuid_doc(uuidv: str):
+    uuidv = str(uuidv or "").strip()
+    if not uuidv:
+        return None
+    docs = db.collection("users").where("uuid", "==", uuidv).limit(1).stream()
+    for doc in docs:
+        return doc
+    return None
+
+
 def username_exists(username: str, exclude_doc_id: str | None = None) -> bool:
     docs = db.collection("users").where("username", "==", username).limit(5).stream()
     for doc in docs:
@@ -112,6 +122,22 @@ def validate_password(password: str) -> str | None:
     if len(password) > 128:
         return "senha muito longa"
     return None
+
+
+def validate_skin_model(model: str) -> str:
+    model = str(model or "classic").strip().lower()
+    if model not in ("classic", "slim"):
+        return "classic"
+    return model
+
+
+def build_skin_payload(user: dict) -> dict:
+    return {
+        "skin_type": user.get("skin_type", "default") or "default",
+        "skin_url": user.get("skin_url", "") or "",
+        "skin_model": validate_skin_model(user.get("skin_model", "classic")),
+        "skin_updated_at": int(user.get("skin_updated_at", 0) or 0),
+    }
 
 
 # =========================
@@ -304,6 +330,10 @@ def register_start():
             "created_at": now_ts(),
             "updated_at": now_ts(),
             "linked_google": False,
+            "skin_type": "default",
+            "skin_url": "",
+            "skin_model": "classic",
+            "skin_updated_at": 0,
         })
 
         return jsonify({
@@ -314,6 +344,9 @@ def register_start():
                 "uuid": player_uuid,
                 "email": email,
                 "provider": "email",
+                "skin_type": "default",
+                "skin_url": "",
+                "skin_model": "classic",
             },
         })
     except Exception as e:
@@ -346,13 +379,17 @@ def login_start():
                 "uuid": user.get("uuid", ""),
                 "email": user.get("email", ""),
                 "provider": user.get("provider", "email"),
+                "skin_type": user.get("skin_type", "default"),
+                "skin_url": user.get("skin_url", ""),
+                "skin_model": user.get("skin_model", "classic"),
+                "skin_updated_at": int(user.get("skin_updated_at", 0) or 0),
             },
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-# Compatibilidade com launchers antigos que ainda chamam as rotas de confirmação
+# Compatibilidade com launchers antigos
 @app.post("/auth/register/confirm")
 def register_confirm():
     return jsonify({
@@ -367,6 +404,106 @@ def login_confirm():
         "ok": False,
         "error": "verificação por código foi removida; use /auth/login/start"
     }), 410
+
+
+# =========================
+# SKIN
+# =========================
+@app.get("/skin/get")
+def skin_get():
+    try:
+        uuidv = str(request.args.get("uuid", "")).strip()
+
+        if not uuidv:
+            return jsonify({"ok": False, "error": "uuid ausente"}), 400
+
+        user_doc = find_user_by_uuid_doc(uuidv)
+        if not user_doc:
+            return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
+
+        user = user_doc.to_dict() or {}
+
+        return jsonify({
+            "ok": True,
+            "skin": build_skin_payload(user),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.post("/skin/set")
+def skin_set():
+    try:
+        data = request.json or {}
+        uuidv = str(data.get("uuid", "")).strip()
+        skin_url = str(data.get("skin_url", "")).strip()
+        skin_model = validate_skin_model(data.get("skin_model", "classic"))
+
+        if not uuidv:
+            return jsonify({"ok": False, "error": "uuid ausente"}), 400
+
+        if not skin_url:
+            return jsonify({"ok": False, "error": "skin_url ausente"}), 400
+
+        user_doc = find_user_by_uuid_doc(uuidv)
+        if not user_doc:
+            return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
+
+        db.collection("users").document(user_doc.id).set({
+            "skin_type": "custom",
+            "skin_url": skin_url,
+            "skin_model": skin_model,
+            "skin_updated_at": now_ts(),
+            "updated_at": now_ts(),
+        }, merge=True)
+
+        return jsonify({
+            "ok": True,
+            "message": "Skin salva com sucesso",
+            "skin": {
+                "skin_type": "custom",
+                "skin_url": skin_url,
+                "skin_model": skin_model,
+                "skin_updated_at": now_ts(),
+            }
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.post("/skin/reset")
+def skin_reset():
+    try:
+        data = request.json or {}
+        uuidv = str(data.get("uuid", "")).strip()
+
+        if not uuidv:
+            return jsonify({"ok": False, "error": "uuid ausente"}), 400
+
+        user_doc = find_user_by_uuid_doc(uuidv)
+        if not user_doc:
+            return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
+
+        db.collection("users").document(user_doc.id).set({
+            "skin_type": "default",
+            "skin_url": "",
+            "skin_model": "classic",
+            "skin_updated_at": now_ts(),
+            "updated_at": now_ts(),
+        }, merge=True)
+
+        return jsonify({
+            "ok": True,
+            "message": "Skin resetada com sucesso",
+            "skin": {
+                "skin_type": "default",
+                "skin_url": "",
+                "skin_model": "classic",
+                "skin_updated_at": now_ts(),
+            }
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 if __name__ == "__main__":
