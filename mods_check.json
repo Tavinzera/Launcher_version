@@ -1,1 +1,6 @@
-
+{
+  "mods_zip_url": "COLE_AQUI_O_LINK_DIRETO_DO_MODS_ZIP",
+  "mods": [
+    "test.jar"
+  ]
+}
