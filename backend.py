@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import uuid
 from pathlib import Path
@@ -13,49 +14,29 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-# =========================================================
-# COLE AQUI SEUS JSONS COMPLETOS
-# =========================================================
-FIREBASE_SECRET = r'''
-{
-  "type": "service_account",
-  "project_id": "COLE_AQUI",
-  "private_key_id": "COLE_AQUI",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nCOLE_AQUI\n-----END PRIVATE KEY-----\n",
-  "client_email": "COLE_AQUI",
-  "client_id": "COLE_AQUI",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "COLE_AQUI"
-}
-'''
+FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
+GOOGLE_OAUTH_JSON = os.getenv("GOOGLE_OAUTH_JSON", "").strip()
 
-GOOGLE_OAUTH_JSON = r'''
-{
-  "installed": {
-    "client_id": "COLE_AQUI",
-    "project_id": "COLE_AQUI",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_secret": "COLE_AQUI",
-    "redirect_uris": [
-      "http://localhost"
-    ]
-  }
-}
-'''
+if not FIREBASE_SECRET:
+    raise RuntimeError("FIREBASE_SECRET não configurado no ambiente")
+
+if not GOOGLE_OAUTH_JSON:
+    raise RuntimeError("GOOGLE_OAUTH_JSON não configurado no ambiente")
 
 try:
     firebase_dict = json.loads(FIREBASE_SECRET)
 except Exception as e:
-    raise RuntimeError(f"FIREBASE_SECRET inválido no arquivo: {e}")
+    raise RuntimeError(f"FIREBASE_SECRET inválido: {e}")
 
 try:
     oauth_dict = json.loads(GOOGLE_OAUTH_JSON)
 except Exception as e:
-    raise RuntimeError(f"GOOGLE_OAUTH_JSON inválido no arquivo: {e}")
+    raise RuntimeError(f"GOOGLE_OAUTH_JSON inválido: {e}")
+
+if "private_key" in firebase_dict and isinstance(firebase_dict["private_key"], str):
+    firebase_dict["private_key"] = firebase_dict["private_key"].replace("\\n", "\n").strip()
+    if not firebase_dict["private_key"].endswith("\n"):
+        firebase_dict["private_key"] += "\n"
 
 installed = oauth_dict.get("installed", {})
 GOOGLE_CLIENT_ID = str(installed.get("client_id", "")).strip()
@@ -73,6 +54,7 @@ STATIC_DIR = BASE_DIR / "static"
 SKINS_DIR = STATIC_DIR / "skins"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 SKINS_DIR.mkdir(parents=True, exist_ok=True)
+
 MAX_SKIN_BYTES = 2 * 1024 * 1024
 
 
@@ -118,32 +100,6 @@ def find_user_by_uuid_doc(uuidv: str):
     for doc in docs:
         return doc
     return None
-
-
-def can_change_skin(uuidv: str):
-    user_doc = find_user_by_uuid_doc(uuidv)
-    if not user_doc:
-        return None, "usuário não encontrado no banco"
-
-    user = user_doc.to_dict() or {}
-    provider = str(user.get("provider", "") or "").strip().lower()
-    email = str(user.get("email", "") or "").strip()
-    username = str(user.get("username", "") or "").strip()
-    user_uuid = str(user.get("uuid", "") or "").strip()
-
-    if provider not in ("email", "google"):
-        return None, f"provider inválido: {provider or 'vazio'}"
-
-    if not email:
-        return None, "conta sem email salvo no banco"
-
-    if not username:
-        return None, "conta sem username salvo no banco"
-
-    if not user_uuid:
-        return None, "conta sem uuid salvo no banco"
-
-    return user_doc, None
 
 
 def username_exists(username: str, exclude_doc_id: str | None = None) -> bool:
@@ -207,6 +163,32 @@ def delete_existing_skin_files(uuidv: str) -> None:
                 pass
 
 
+def can_change_skin(uuidv: str):
+    user_doc = find_user_by_uuid_doc(uuidv)
+    if not user_doc:
+        return None, "usuário não encontrado no banco"
+
+    user = user_doc.to_dict() or {}
+    provider = str(user.get("provider", "") or "").strip().lower()
+    email = str(user.get("email", "") or "").strip()
+    username = str(user.get("username", "") or "").strip()
+    user_uuid = str(user.get("uuid", "") or "").strip()
+
+    if provider not in ("email", "google"):
+        return None, f"provider inválido: {provider or 'vazio'}"
+
+    if not email:
+        return None, "conta sem email salvo no banco"
+
+    if not username:
+        return None, "conta sem username salvo no banco"
+
+    if not user_uuid:
+        return None, "conta sem uuid salvo no banco"
+
+    return user_doc, None
+
+
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
@@ -249,7 +231,7 @@ def auth_google():
                 "email": email,
                 "name": name,
                 "picture": picture,
-                "provider": "google" if old.get("provider") != "google" else old.get("provider"),
+                "provider": "google",
                 "linked_google": True,
                 "updated_at": now_ts(),
             }, merge=True)
@@ -457,27 +439,10 @@ def login_start():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.post("/auth/register/confirm")
-def register_confirm():
-    return jsonify({
-        "ok": False,
-        "error": "verificação por código foi removida; use /auth/register/start"
-    }), 410
-
-
-@app.post("/auth/login/confirm")
-def login_confirm():
-    return jsonify({
-        "ok": False,
-        "error": "verificação por código foi removida; use /auth/login/start"
-    }), 410
-
-
 @app.get("/skin/get")
 def skin_get():
     try:
         uuidv = str(request.args.get("uuid", "")).strip()
-
         if not uuidv:
             return jsonify({"ok": False, "error": "uuid ausente"}), 400
 
@@ -487,49 +452,6 @@ def skin_get():
 
         user = user_doc.to_dict() or {}
         return jsonify({"ok": True, "skin": build_skin_payload(user)})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.post("/skin/set")
-def skin_set():
-    try:
-        data = request.json or {}
-        uuidv = str(data.get("uuid", "")).strip()
-        skin_url = str(data.get("skin_url", "")).strip()
-        skin_model = validate_skin_model(data.get("skin_model", "classic"))
-
-        if not uuidv:
-            return jsonify({"ok": False, "error": "uuid ausente"}), 400
-
-        user_doc, err = can_change_skin(uuidv)
-        if user_doc is None:
-            return jsonify({"ok": False, "error": err}), 403
-
-        if not skin_url:
-            return jsonify({"ok": False, "error": "skin_url ausente"}), 400
-
-        user_doc = find_user_by_uuid_doc(uuidv)
-        updated_ts = now_ts()
-
-        db.collection("users").document(user_doc.id).set({
-            "skin_type": "custom",
-            "skin_url": skin_url,
-            "skin_model": skin_model,
-            "skin_updated_at": updated_ts,
-            "updated_at": updated_ts,
-        }, merge=True)
-
-        return jsonify({
-            "ok": True,
-            "message": "Skin salva com sucesso",
-            "skin": {
-                "skin_type": "custom",
-                "skin_url": skin_url,
-                "skin_model": skin_model,
-                "skin_updated_at": updated_ts,
-            }
-        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -588,11 +510,6 @@ def skin_upload():
                 "skin_url": skin_url,
                 "skin_model": skin_model,
                 "skin_updated_at": updated_ts,
-            },
-            "debug": {
-                "saved_path": str(final_path),
-                "saved_bytes": len(raw),
-                "uuid": uuidv
             }
         })
     except Exception as e:
@@ -611,10 +528,6 @@ def skin_reset():
         user_doc, err = can_change_skin(uuidv)
         if user_doc is None:
             return jsonify({"ok": False, "error": err}), 403
-
-        user_doc = find_user_by_uuid_doc(uuidv)
-        if not user_doc:
-            return jsonify({"ok": False, "error": "usuário não encontrado"}), 404
 
         delete_existing_skin_files(uuidv)
         updated_ts = now_ts()
@@ -642,4 +555,5 @@ def skin_reset():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)
+    port = int(os.getenv("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
