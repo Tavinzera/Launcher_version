@@ -1,8 +1,4 @@
 {
-    "version-launcher": {
-        "id": "2.0"
-    },
-    "version-mods": {
-        "id": "1.0"
-    }
+    "version-id": "1.0"
+    "mods-id": "1.0"
 }
